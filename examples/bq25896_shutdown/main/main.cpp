@@ -19,7 +19,6 @@
 
 #include <XPowersLib.h>
 
-static const char *TAG = "main";
 XPowersPPM PPM;
 
 const uint8_t i2c_sda = BOARD_I2C_SDA;
