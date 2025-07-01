@@ -1,0 +1,4 @@
+.vscode/
+examples/esp_lcd_lt8912b/
+examples/ink_test/
+build
