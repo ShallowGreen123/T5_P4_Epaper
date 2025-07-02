@@ -8,4 +8,4 @@ add_compile_options(
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(bq25896_shutdown)
+project(bq27220)
