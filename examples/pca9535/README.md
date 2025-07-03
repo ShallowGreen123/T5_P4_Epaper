@@ -1,0 +1,1 @@
+idf.py add-dependency "wngfra/esp_io_expander_pca9535^1.0.1"
