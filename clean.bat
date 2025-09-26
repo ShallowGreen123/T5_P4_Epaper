@@ -9,7 +9,9 @@ REM 定义列表
 set "fileList="
 call :appendFileList hello_world
 call :appendFileList i2c_tools
-
+call :appendFileList bq25896
+call :appendFileList bq25896_shutdown
+call :appendFileList bq27220
 
 REM 遍历列表并输出文件名
 for %%i in (%fileList%) do (
@@ -22,9 +24,19 @@ for %%i in (%fileList%) do (
         ECHO delete: examples\%%i\build
     )
 
+    IF EXIST "examples\%%i\managed_components" (
+        rmdir /s /q examples\%%i\managed_components
+        ECHO delete: examples\%%i\managed_components
+    )
+
     IF EXIST "examples\%%i\sdkconfig" (
         del examples\%%i\sdkconfig
         ECHO delete: examples\%%i\sdkconfig
+    )
+
+    IF EXIST "examples\%%i\sdkconfig.old" (
+        del examples\%%i\sdkconfig.old
+        ECHO delete: examples\%%i\sdkconfig.old
     )
 )
 

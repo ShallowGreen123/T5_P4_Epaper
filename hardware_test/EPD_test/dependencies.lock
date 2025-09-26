@@ -1,10 +1,4 @@
 dependencies:
-  SensorLib:
-    dependencies: []
-    source:
-      path: D:\dgx\code\0_lilygo\T5_P4_E_Paper\components\SensorLib
-      type: local
-    version: '*'
   chmorgan/esp-libhelix-mp3:
     component_hash: cbb76089dc2c5749f7b470e2e70aedc44c9da519e04eb9a67d4c7ec275229e53
     dependencies:
@@ -141,7 +135,7 @@ dependencies:
     - esp32p4
     version: 3.2.0
   espressif/eppp_link:
-    component_hash: 3b1c8f79fa1261a87b9fa8ea6012cb8bf058a949d120c8ad59e1eeffdc0c154f
+    component_hash: 24fa36b363cbf5f9321817fca0be15777d59e24e947ece66092691c89a7cf1f1
     dependencies:
     - name: espressif/esp_serial_slave_link
       registry_url: https://components.espressif.com
@@ -153,7 +147,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.0.0
+    version: 1.1.2
   espressif/esp-dsp:
     component_hash: 42dce32d46ac93dc11f60d368e29a830e9661c7345d794b8a45c343479cae636
     dependencies:
@@ -195,7 +189,7 @@ dependencies:
       type: service
     version: 1.4.0
   espressif/esp_serial_slave_link:
-    component_hash: d8c13c033a7604e9333b5d8ea45e0d6fec908fd552df7db20d33dd8d6916528d
+    component_hash: 7cd3bae703cc6136b578ef521b2f9df3171d029775a3558f0efdb200a3b04f57
     dependencies:
     - name: idf
       require: private
@@ -203,7 +197,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.0~1
+    version: 1.1.1~1
   espressif/esp_wifi_remote:
     component_hash: 8ba87759d57ad61882c5db0d2e4055c8e28711ceac535c45dc166dcb0a6d397d
     dependencies:
@@ -269,9 +263,8 @@ dependencies:
       type: service
     version: 1.20.1
 direct_dependencies:
-- SensorLib
 - espressif/arduino-esp32
 - idf
-manifest_hash: 52bcc72a924d3f95c53dfb6a91ca5fb606824e3077abe6e01a07b24f13410839
+manifest_hash: d124984ac97a4b4f56fec81ae18505ed20cf3ce910f6d44dd45894e20470b100
 target: esp32p4
 version: 2.0.0

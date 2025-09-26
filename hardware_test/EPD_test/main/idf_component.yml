@@ -16,9 +16,3 @@ dependencies:
   #   public: true
   espressif/arduino-esp32: ==3.2.0
 
-  SensorLib:
-    version: "*"
-    public: true
-    override_path: "../../../components/SensorLib"
-
-  
