@@ -15,4 +15,5 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/arduino-esp32: ==3.2.0
+  # bitbank2/jpegdec: ^1.6.2
 

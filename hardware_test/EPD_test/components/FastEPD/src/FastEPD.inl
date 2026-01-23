@@ -24,6 +24,7 @@
 
 #ifndef __BB_EP__
 #define __BB_EP__
+#pragma GCC optimize("O2")
 
 // For measuring the performance of each stage of updates
 //#define SHOW_TIME
@@ -165,7 +166,7 @@ const uint8_t u8M5Matrix[] = {
 // Forward references
 int bbepSetPixel2Clr(void *pb, int x, int y, unsigned char ucColor);
 void bbepSetPixelFast2Clr(void *pb, int x, int y, unsigned char ucColor);
-int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags);
+int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int iVCOM);
 int bbepSetCustomMatrix(FASTEPDSTATE *pState, const uint8_t *pMatrix, size_t matrix_size);
 //
 // Pre-defined panels for popular products and boards
@@ -173,7 +174,7 @@ int bbepSetCustomMatrix(FASTEPDSTATE *pState, const uint8_t *pMatrix, size_t mat
 // width, height, bus_speed, flags, data[8], bus_width, ioPWR, ioSPV, ioCKV, ioSPH, ioOE, ioLE,
 // ioCL, ioPWR_Good, ioSDA, ioSCL, ioShiftSTR/Wakeup, ioShiftMask/vcom, ioDCDummy, graymatrix, sizeof(graymatrix), iLinePadding
 const BBPANELDEF panelDefs[] = {
-    {0}, // BB_PANEL_NONE
+    {0,0,0,0,{0},0,0,0,0,0,0,0,0,0,0,0,0,0,0,NULL,0,0}, // BB_PANEL_NONE
     {960, 540, 20000000, BB_PANEL_FLAG_NONE, {6,14,7,12,9,11,8,10}, 8, 46, 17, 18, 13, 45, 15,
       16, BB_NOT_USED, BB_NOT_USED, BB_NOT_USED, BB_NOT_USED, BB_NOT_USED, 47, u8M5Matrix, sizeof(u8M5Matrix), 0}, // BB_PANEL_M5PAPERS3
 
@@ -189,7 +190,7 @@ const BBPANELDEF panelDefs[] = {
     {0, 0, 20000000, BB_PANEL_FLAG_NONE, {9,10,11,12,13,14,21,47,5,6,7,15,16,17,18,8}, 16, 11, 45, 48, 41, 8, 42,
       4, 14, 39, 40, BB_NOT_USED, 0, 46, u8GrayMatrix, sizeof(u8GrayMatrix), 16}, // BB_PANEL_EPDIY_V7_16
 
-    {0, 0, 20000000, BB_PANEL_FLAG_NONE, {5,6,7,15,16,17,18,8}, 8, 11, 45, 48, 41, 9, 42,
+    {0, 0, 26666666, BB_PANEL_FLAG_NONE, {5,6,7,15,16,17,18,8}, 8, 11, 45, 48, 41, 9, 42,
       4, 14, 39, 40, BB_NOT_USED, 0, 0, u8M5Matrix, sizeof(u8M5Matrix), 0}, // BB_PANEL_V7_RAW
     //                                             D8                 15 D0                  D7          STV,CKV,XSTL,OE,XLE
     {1872, 1404, 20000000, BB_PANEL_FLAG_MIRROR_X, {8,18,17,16,15,7,6,5,47,21,14,13,12,11,10,9}, 16, 11, 41, 42, 45, 8, 48,
@@ -232,7 +233,7 @@ uint8_t Inkplate5V2ExtIO(uint8_t iOp, uint8_t iPin, uint8_t iVal);
 // List of predefined callback functions for the panels supported by bb_epdiy
 // BB_EINK_POWER, BB_IO_INIT, BB_ROW_CONTROL
 const BBPANELPROCS panelProcs[] = {
-    {0}, // BB_PANEL_NONE
+    {NULL,NULL,NULL,NULL,NULL}, // BB_PANEL_NONE
     {PaperS3EinkPower, PaperS3IOInit, PaperS3RowControl, NULL, NULL}, // BB_PANEL_M5PAPERS3
     {EPDiyV7EinkPower, EPDiyV7IOInit, EPDiyV7RowControl, EPDiyV7IODeInit, EPDiyV7ExtIO}, // BB_PANEL_EPDIY_V7
     {Inkplate6PlusEinkPower, Inkplate6PlusIOInit, Inkplate6PlusRowControl, NULL, NULL}, // BB_PANEL_INKPLATE6PLUS
@@ -247,6 +248,7 @@ const BBPANELPROCS panelProcs[] = {
 uint8_t ioRegs[24]; // MCP23017 copy of I/O register state so that we can just write new bits
 static uint16_t LUTW_16[256];
 static uint16_t LUTB_16[256];
+static uint16_t LUTBW_16[256];
 // Lookup tables for grayscale mode
 static uint32_t *pGrayLower = NULL, *pGrayUpper = NULL;
 volatile bool dma_is_done = true;
@@ -272,8 +274,8 @@ static esp_lcd_i80_bus_config_t s3_bus_config = {
     .data_gpio_nums = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     .bus_width = 0,
     .max_transfer_bytes = MAX_TX_SIZE, 
-//    .psram_trans_align = 0, // 0 = use default values
-//    .sram_trans_align = 0,
+    .psram_trans_align = 0, // 0 = use default values
+    .sram_trans_align = 0,
 };
 static esp_lcd_panel_io_i80_config_t s3_io_config = {
         .cs_gpio_num = 0,
@@ -693,6 +695,7 @@ int EPDiyV7EinkPower(void *pBBEP, int bOn)
 FASTEPDSTATE *pState = (FASTEPDSTATE *)pBBEP;
 uint8_t ucTemp[4];
 uint8_t u8Value = 0; // I/O bits for the PCA9535
+int vcom;
 
     if (bOn == pState->pwr_on) return BBEP_SUCCESS;
     if (bOn) {
@@ -707,19 +710,22 @@ uint8_t u8Value = 0; // I/O bits for the PCA9535
         ucTemp[0] = TPS_REG_ENABLE;
         ucTemp[1] = 0x3f; // enable output
         bbepI2CWrite(0x68, ucTemp, 2);
-        // set VCOM to 1.6v (1600)
+        printf("ucTemp = %x:%x:%x:%x\n", ucTemp[0], ucTemp[1], ucTemp[2], ucTemp[3]);
+
+        // set VCOM (usually -1.6V = -1600mV = 160 value used in registers
+        vcom = pState->iVCOM / -10; // convert to TPS format
         ucTemp[0] = 3; // vcom voltage register 3+4 = L + H
-        ucTemp[1] = (uint8_t)(160);
-        ucTemp[2] = (uint8_t)(160 >> 8);
-//        ucTemp[1] = (uint8_t)(160);
-//        ucTemp[2] = (uint8_t)(160 >> 8);
+        ucTemp[1] = (uint8_t)vcom;
+        ucTemp[2] = (uint8_t)(vcom >> 8);
         bbepI2CWrite(0x68, ucTemp, 3);
+        printf("ucTemp = %x:%x:%x:%x\n", ucTemp[0], ucTemp[1], ucTemp[2], ucTemp[3]);
 
         int iTimeout = 0;
         u8Value = 0;
         while (iTimeout < 400 && ((u8Value & 0xfa) != 0xfa)) {
             bbepI2CReadRegister(0x68, TPS_REG_PG, &u8Value, 1); // read power good
             iTimeout++;
+            printf("u8Value = %x\n", u8Value);
             vTaskDelay(1);
         }
         if (iTimeout >= 400) {
@@ -779,9 +785,9 @@ uint8_t u8Value = 0; // I/O bits for the PCA9535
     } else { // power off
         gpio_set_level((gpio_num_t)pState->panelDef.ioOE, 0); // OE off
         gpio_set_level((gpio_num_t)10, 0); // EP_MODE/GMOD off
-        gpio_set_level((gpio_num_t)14, 1); // WAKEUP on
-        gpio_set_level((gpio_num_t)11, 1); // PWRUP on
-        gpio_set_level((gpio_num_t)12, 1); // VCOM CTRL on
+        gpio_set_level((gpio_num_t)12, 0); // VCOM CTRL off
+        gpio_set_level((gpio_num_t)11, 0); // PWRUP off
+        gpio_set_level((gpio_num_t)14, 0); // WAKEUP off
         vTaskDelay(1); // only leave WAKEUP on
         gpio_set_level((gpio_num_t)14, 0);// now turn everything off
         pState->pwr_on = 0;
@@ -1248,23 +1254,27 @@ int bbepSetDefinedPanel(FASTEPDSTATE *pState, int iPanel)
     if (iPanel < 0 || iPanel >= BBEP_DISPLAY_COUNT) return BBEP_ERROR_BAD_PARAMETER;
     switch (iPanel) {
         case BBEP_DISPLAY_EC060TC1:
-            bbepSetPanelSize(pState, 1024, 758, BB_PANEL_FLAG_NONE);
+            bbepSetPanelSize(pState, 1024, 758, BB_PANEL_FLAG_NONE, -1600);
             bbepSetCustomMatrix(pState, u8SixInchMatrix, sizeof(u8SixInchMatrix));
             break;
         case BBEP_DISPLAY_EC060KD1:
-            bbepSetPanelSize(pState, 1448, 1072, BB_PANEL_FLAG_NONE);
+            bbepSetPanelSize(pState, 1448, 1072, BB_PANEL_FLAG_NONE, -1600);
             bbepSetCustomMatrix(pState, u8SixInchMatrix, sizeof(u8SixInchMatrix));
             break;
         case BBEP_DISPLAY_ED0970TC1:
-            bbepSetPanelSize(pState, 1280, 825, BB_PANEL_FLAG_NONE);
+            bbepSetPanelSize(pState, 1280, 825, BB_PANEL_FLAG_NONE, -1600);
             bbepSetCustomMatrix(pState, u8NineInchMatrix, sizeof(u8NineInchMatrix));
             break;
         case BBEP_DISPLAY_ED103TC2:
-            bbepSetPanelSize(pState, 1872, 1414, BB_PANEL_FLAG_MIRROR_X);
+            bbepSetPanelSize(pState, 1872, 1414, BB_PANEL_FLAG_MIRROR_X, -1600);
             bbepSetCustomMatrix(pState, u8TenPointThreeMatrix, sizeof(u8TenPointThreeMatrix));
             break;
         case BBEP_DISPLAY_ED052TC4:
-            bbepSetPanelSize(pState, 1280, 720, BB_PANEL_FLAG_MIRROR_X);
+            bbepSetPanelSize(pState, 1280, 720, BB_PANEL_FLAG_MIRROR_X, -1600);
+            bbepSetCustomMatrix(pState, u8FivePointTwoMatrix, sizeof(u8FivePointTwoMatrix));
+            break;
+        case BBEP_DISPLAY_ED1150C1:
+            bbepSetPanelSize(pState, 2760, 2070, BB_PANEL_FLAG_NONE, -1000);
             bbepSetCustomMatrix(pState, u8FivePointTwoMatrix, sizeof(u8FivePointTwoMatrix));
             break;
     } // switch on panel
@@ -1274,7 +1284,7 @@ int bbepSetDefinedPanel(FASTEPDSTATE *pState, int iPanel)
 // For board definitions without an associated display (e.g. EPDiy V7 PCB)
 // Set the display size and flags
 //
-int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags) {
+int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags, int iVCOM) {
     int iPasses;
     uint8_t *pMatrix;
 
@@ -1283,6 +1293,7 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags) {
     pState->width = pState->native_width = width;
     pState->height = pState->native_height = height;
     pState->iFlags = flags;
+    pState->iVCOM = iVCOM;
     pState->pCurrent = (uint8_t *)heap_caps_aligned_alloc(16, (pState->width * pState->height) / 2, MALLOC_CAP_SPIRAM); // current pixels
     if (!pState->pCurrent) return BBEP_ERROR_NO_MEMORY;
     if (pState->iPanelType == BB_PANEL_VIRTUAL) {
@@ -1320,28 +1331,34 @@ int bbepSetPanelSize(FASTEPDSTATE *pState, int width, int height, int flags) {
     } // for j
     // Create the lookup tables for 1-bit mode. Allow for inverted and mirrored
     for (int i=0; i<256; i++) {
-        uint16_t b, w, u16W, u16B;
-        u16W = u16B = 0;
+        uint16_t b, w, bw, u16W, u16B, u16BW;
+        u16W = u16B = u16BW = 0;
         for (int j=0; j<8; j++) {
             // a 1 means do nothing and 0 means move towards black or white (depending on the LUT)
             if (pState->iFlags & BB_PANEL_FLAG_MIRROR_X) {
                 if (!(i & (1<<(7-j)))) {
                     w = 2; b = 1;
+                    bw = 1;
                 } else {
                     w = 3; b = 3;
+                    bw = 2;
                 }
             } else {
                 if (!(i & (0x80>>(7-j)))) {
                     w = 2; b = 1;
+                    bw = 1;
                 } else {
                     w = 3; b = 3;
+                    bw = 2;
                 }
             }
             u16W |= (w << (j * 2));
             u16B |= (b << (j * 2));
+            u16BW |= (bw << (j * 2));
         } // for j
         LUTW_16[i] = __builtin_bswap16(u16W);
         LUTB_16[i] = __builtin_bswap16(u16B);
+        LUTBW_16[i] = __builtin_bswap16(u16BW);
     } // for i
 return BBEP_SUCCESS;
 } /* setPanelSize() */
@@ -1409,6 +1426,7 @@ int bbepInitPanel(FASTEPDSTATE *pState, int iPanel, uint32_t u32Speed)
         pState->mode = BB_MODE_1BPP; // start in 1-bit mode
         pState->iFG = BBEP_BLACK;
         pState->iBG = BBEP_TRANSPARENT;
+        pState->iVCOM = -1600; // assume VCOM is -1.6V (typical)
         pState->pfnSetPixel = bbepSetPixel2Clr;
         pState->pfnSetPixelFast = bbepSetPixelFast2Clr;
         pState->pCurrent = NULL; // make sure the memory is allocated
@@ -1433,7 +1451,7 @@ int bbepInitPanel(FASTEPDSTATE *pState, int iPanel, uint32_t u32Speed)
         if (rc == BBEP_SUCCESS) {
             // allocate memory for the buffers if the paneldef contains the size
             if (pState->width) { // if size is defined
-                rc = bbepSetPanelSize(pState, pState->width, pState->height, pState->iFlags);
+                rc = bbepSetPanelSize(pState, pState->width, pState->height, pState->iFlags, pState->iVCOM);
                 if (rc != BBEP_SUCCESS) return rc; // no memory? stop
             }
         }
@@ -1897,12 +1915,14 @@ int bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iE
             pCur += (pState->native_width / 8) - 1;
             pPrev += (pState->native_width / 8) - 1;
             for (n = 0; n < pState->native_width / 16; n++) {
-                cur = *pCur--; prev = *pPrev--;
+                cur = *pCur--; prev = *pPrev;
+                *pPrev-- = cur; // new->old
                 diffw = prev & ~cur;
                 diffb = ~prev & cur;
                 *(uint16_t *)&d[0] = LUTW_16[diffw] & LUTB_16[diffb];
 
-                cur = *pCur--; prev = *pPrev--;
+                cur = *pCur--; prev = *pPrev;
+                *pPrev-- = cur; // new->old
                 diffw = prev & ~cur;
                 diffb = ~prev & cur;
                 *(uint16_t *)&d[2] = LUTW_16[diffw] & LUTB_16[diffb];
@@ -1910,12 +1930,14 @@ int bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iE
             }
         } else {
             for (n = 0; n < pState->native_width / 16; n++) {
-                cur = *pCur++; prev = *pPrev++;
+                cur = *pCur++; prev = *pPrev;
+                *pPrev++ = cur; // new->old
                 diffw = prev & ~cur;
                 diffb = ~prev & cur;
                 *(uint16_t *)&d[0] = LUTW_16[diffw] & LUTB_16[diffb];
 
-                cur = *pCur++; prev = *pPrev++;
+                cur = *pCur++; prev = *pPrev;
+                *pPrev++ = cur; // new->old
                 diffw = prev & ~cur;
                 diffb = ~prev & cur;
                 *(uint16_t *)&d[2] = LUTW_16[diffw] & LUTB_16[diffb];
@@ -1961,7 +1983,6 @@ int bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iE
             dp += iDelta;
             iDMAOff ^= (pState->native_width/4);
         }
-      //  delayMicroseconds(230);
     } // for each pass
 
 // This clear to neutral step is necessary; do not remove
@@ -1969,8 +1990,6 @@ int bbepPartialUpdate(FASTEPDSTATE *pState, bool bKeepOn, int iStartLine, int iE
     if (!bKeepOn) {
         bbepEinkPower(pState, 0);
     }
-    int offset = iStartLine * (pState->native_width/8);
-    memcpy(&pState->pPrevious[offset], &pState->pCurrent[offset], (pState->native_width/8) * (iEndLine - iStartLine+1));
 
 #ifdef SHOW_TIME
     l = millis() - l;

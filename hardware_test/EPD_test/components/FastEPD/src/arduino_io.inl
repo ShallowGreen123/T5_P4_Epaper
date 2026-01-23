@@ -22,11 +22,11 @@
 #define __BB_EP_IO__
 
 // Since the Espressif I2C driver seems to corrupt memory with it's frequent allocs and frees, use bit banging
-#define BIT_BANG
+// #define BIT_BANG
 
 #ifdef BIT_BANG
 static uint8_t u8SDA_Pin, u8SCL_Pin;
-static int iDelay = 1;
+static int iDelay = 0; //1;
 #endif
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -277,6 +277,7 @@ int bbepI2CInit(uint8_t sda, uint8_t scl)
     Wire.setTimeout(100);
 #else
     i2c_config_t conf;
+    ESP_ERROR_CHECK(i2c_driver_delete());
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = sda;
     conf.scl_io_num = scl;

@@ -12,8 +12,6 @@
 FASTEPD epaper;
 uint8_t *pBuffer;
 JPEGDEC jpg;
-JPEGIMAGE _jpeg;
-
 
 int JPEGDraw(JPEGDRAW *pDraw)
 {
@@ -50,11 +48,6 @@ int rc;
             jpg.decode(0, 0, 0);
             epaper.fullUpdate();
         }
-        // if (JPEG_openRAM(&_jpeg, (uint8_t *)it_cartoon, sizeof(it_cartoon), JPEGDraw)) {
-        //     JPEG_setPixelType(&_jpeg, EIGHT_BIT_GRAYSCALE);
-        //     JPEG_decode(&_jpeg, 0, 0, 0);
-        //     epaper.fullUpdate();
-        // }
     }
     while (1) {
         vTaskDelay(1);

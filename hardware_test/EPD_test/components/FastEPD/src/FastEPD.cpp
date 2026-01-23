@@ -26,6 +26,9 @@
 #include "arduino_io.inl"
 #include "FastEPD.inl"
 #include "bb_ep_gfx.inl"
+#include "esp_log.h"
+
+static char *TAG = "FastEPD";
 
 //#pragma GCC optimize("O2")
 // Display how much time each operation takes on the serial monitor
@@ -128,7 +131,7 @@ int FASTEPD::initSprite(int iWidth, int iHeight)
 int rc;
     rc = bbepInitPanel(&_state, BB_PANEL_VIRTUAL, 0);
     if (rc == BBEP_SUCCESS) {
-        rc = bbepSetPanelSize(&_state, iWidth, iHeight, 0);
+        rc = bbepSetPanelSize(&_state, iWidth, iHeight, 0, 0);
     }
     return rc;
 } /* initSprite() */
@@ -339,13 +342,15 @@ int FASTEPD::setPanelSize(int iPanel)
     return bbepSetDefinedPanel(&_state, iPanel);
 }
 
-int FASTEPD::setPanelSize(int width, int height, int flags) {
-    return bbepSetPanelSize(&_state, width, height, flags);
+int FASTEPD::setPanelSize(int width, int height, int flags, int iVCOM) {
+    return bbepSetPanelSize(&_state, width, height, flags, iVCOM);
 } /* setPanelSize() */
 
 int FASTEPD::initPanel(int iPanel, uint32_t u32Speed)
 {
     return bbepInitPanel(&_state, iPanel, u32Speed);
+
+    ESP_LOGI(TAG, "initPanel\n");
 } /* initIO() */
 
 int FASTEPD::einkPower(int bOn)
@@ -355,7 +360,12 @@ int FASTEPD::einkPower(int bOn)
 
 int FASTEPD::clearWhite(bool bKeepOn)
 {
-    if (bbepEinkPower(&_state, 1) != BBEP_SUCCESS) return BBEP_IO_ERROR;
+    // if (bbepEinkPower(&_state, 1) != BBEP_SUCCESS) return BBEP_IO_ERROR;
+
+    int rc = bbepEinkPower(&_state, 1);
+    ESP_LOGI(TAG, "bbepEinkPower = %d\n", rc);
+    if (rc != BBEP_SUCCESS) return BBEP_IO_ERROR;
+
     fillScreen((_state.mode == BB_MODE_1BPP) ? BBEP_WHITE : 0xf);
     backupPlane(); // previous buffer set to the same color
     // 7 passes is enough to set all of the displays I've used to pure white or black
