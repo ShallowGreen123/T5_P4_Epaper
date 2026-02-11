@@ -21,7 +21,6 @@
 #include "Wire.h"
 #include <Arduino.h>
 #include <SPI.h>
-#include "Roboto_Black_50.h"
 
 #define DISP_WIDTH 1440
 #define DISP_HEIGHT 720

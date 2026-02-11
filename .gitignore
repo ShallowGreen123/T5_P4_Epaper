@@ -1,4 +1,17 @@
 .vscode/
 examples/esp_lcd_lt8912b/
 examples/ink_test/
+examples/hello_world/
+
 build
+managed_components
+sdkconfig
+sdkconfig.old
+components/SensorLib/
+
+examples/es8311/
+examples/i2s_es8311/
+examples/sd_card/
+hardware_test/p4_jpeg/
+hardware_test/xxxx/
+other/
