@@ -48,7 +48,7 @@ void ui_entry(void)
     lv_label_set_text_fmt(label, "%d", cnt);
     lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -5);
 
-    lv_timer_create(img_switch_test_cb, 1500, NULL);
+    // lv_timer_create(img_switch_test_cb, 1500, NULL);
 }
 
 

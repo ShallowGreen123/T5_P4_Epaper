@@ -21,6 +21,12 @@
 #include "Wire.h"
 #include <Arduino.h>
 #include <SPI.h>
+#include "ft5536.h"
+#include "ExtensionIOXL9555.hpp"
+
+// I2C Pin Definition
+#define I2C_SDA_PIN 7
+#define I2C_SCL_PIN 8
 
 #define DISP_WIDTH 1440
 #define DISP_HEIGHT 720
@@ -160,6 +166,27 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
     lv_disp_flush_ready(disp);
 }
 
+static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    static lv_coord_t last_x = 0;
+    static lv_coord_t last_y = 0;
+
+    /*Save the pressed coordinates and the state*/
+    if(fts_touch_is_pressed()) {
+        fts_touch_get_xy(&last_x, &last_y);
+        data->state = LV_INDEV_STATE_PR;
+
+        Serial.printf("touch pressed: %d, %d\n", last_x, last_y);
+    }
+    else {
+        data->state = LV_INDEV_STATE_REL;
+    }
+
+    /*Set the last pressed coordinates*/
+    data->point.x = last_x;
+    data->point.y = last_y;
+}
+
 void lv_port_disp_init(void)
 {
     lv_init();
@@ -188,11 +215,62 @@ void lv_port_disp_init(void)
     disp_drv.draw_buf = &draw_buf;
     disp_drv.full_refresh = 1;
     lv_disp_drv_register(&disp_drv);
+
+    /*Register a touchpad input device*/
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = touchpad_read;
+    lv_indev_drv_register(&indev_drv);
 }
+
+
+// Function to scan I2C bus
+void scanI2CBus() {
+    Serial.println("I2C Bus Scanner Started");
+    Serial.println("Scanning range: 0x03 - 0x77 (7-bit addresses)");
+    Serial.println();
+
+    // Print table header
+    Serial.println("+-----------------+---------------------+");
+    Serial.println("| Hex Address     | Device Status       |");
+    Serial.println("+-----------------+---------------------+");
+
+    byte error, address;
+    int nDevices = 0;
+
+    // Scan address range 0x03 to 0x77
+    for (address = 0x03; address <= 0x77; address++) {
+        // Try to communicate with device
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+
+        // Determine device status based on error code
+        if (error == 0) {
+            Serial.printf("| 0x%02X           | Connected          |\n", address);
+            nDevices++;
+        } else if (error == 4) {
+            Serial.printf("| 0x%02X           | Communication Error|\n", address);
+        }
+        // Error codes 2, 3, 5 etc. indicate no response - not shown to keep table clean
+
+        delay(1); // Short delay to avoid bus overload
+    }
+
+    // Print table footer
+    Serial.println("+-----------------+---------------------+");
+    Serial.println();
+    Serial.printf("Scan completed. Found %d device(s)\n", nDevices);
+    Serial.println("Note: Only connected devices or communication errors are shown");
+    Serial.println();
+}
+
+
 int tick = 0;
-BB_RECT rect; // rectangle for getting the text size
 void idf_setup()
 {
+    Serial.begin(115200);
+
     epaper.initPanel(BB_PANEL_LILYGO_T5P4, 26666666);
     epaper.setPanelSize(DISP_WIDTH, DISP_HEIGHT);
     pFramebuffer = epaper.currentBuffer();
@@ -200,16 +278,6 @@ void idf_setup()
     // epaper.fillScreen(15);
 #if EPD_USE_4BPP_GRAY
     epaper.setMode(BB_MODE_4BPP);
-    epaper.fillRect(600, 100, 200, 200, 0x8);
-    epaper.setFont(FONT_12x16);
-    epaper.setTextColor(0xe);
-    epaper.drawString("4-bpp", 670, 160);
-    epaper.drawString("Regional Update", 610, 192);
-    rect.x = 600;
-    rect.y = 100;
-    rect.h = rect.w = 200;
-    epaper.fullUpdate(true, false, &rect); // update only the rectangle
-    delay(3000);
 #else
     epaper.clearWhite(); 
     epaper.setMode(BB_MODE_1BPP);
@@ -218,6 +286,9 @@ void idf_setup()
     // epaper.setRotation(180);
     // delay(1000);
 #endif
+
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    ft5536_check_id();
 
     lv_port_disp_init();
 
@@ -231,18 +302,13 @@ void idf_loop()
     lv_timer_handler();
     delay(1);
 
-    if (tick++ > 1000)
+    
+
+    if (tick++ > 50)
     {
         tick = 0;
-
-        // epaper.fillRect(600, 100, 200, 200, 0x8);
-        // epaper.setFont(FONT_12x16);
-        // epaper.setTextColor(0x1);
-        // epaper.drawString("4-bpp", 670, 160);
-        // epaper.drawString("Regional Update", 610, 192);
-        // rect.x = 600;
-        // rect.y = 100;
-        // rect.h = rect.w = 200;
-        // epaper.fullUpdate(true, false, &rect);
+        // scanI2CBus();
+        // fts_touch_process();
+        
     }
 }
