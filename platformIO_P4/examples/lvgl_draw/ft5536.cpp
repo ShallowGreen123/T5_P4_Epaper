@@ -167,7 +167,7 @@ static void log_touch_info(struct fts_ts_event *events, uint8_t event_nums)
     }
 }
 
-int fts_touch_get_xy(int16_t * x, int16_t * y)
+int fts_touch_get_xy(uint16_t * x, uint16_t * y)
 {
     int ret = 0;
     uint8_t i = 0;

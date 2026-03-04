@@ -23,4 +23,4 @@ int ft5536_write_reg(uint8_t addr, uint8_t value);
 int ft5536_check_id(void);
 int fts_touch_process(void);
 bool fts_touch_is_pressed(void);
-int fts_touch_get_xy(int16_t * x, int16_t * y);
+int fts_touch_get_xy(uint16_t * x, uint16_t * y);

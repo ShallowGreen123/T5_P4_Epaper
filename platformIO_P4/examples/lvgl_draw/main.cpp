@@ -32,10 +32,6 @@
 #define DISP_HEIGHT 720
 #define DISP_BUF_SIZE (DISP_WIDTH * DISP_HEIGHT)
 
-LV_FONT_DECLARE(Font_Mono_Bold_30);
-
-LV_IMG_DECLARE(img_test)
-
 // 1 = 4bpp grayscale (2 pixels per byte)
 // 0 = 1bpp (1 bit per pixel)
 #define EPD_USE_4BPP_GRAY 0
@@ -140,7 +136,6 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 #else
             bool is_white = (gray >= 128);
 #endif
-
             if (is_white)
             {
                 pFramebuffer[idx] |= mask; // white
@@ -152,7 +147,6 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 #endif
         }
     }
-
     // full or partial update
 #if EPD_USE_4BPP_GRAY
     epaper.fullUpdate(true, true);
@@ -173,10 +167,34 @@ static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 
     /*Save the pressed coordinates and the state*/
     if(fts_touch_is_pressed()) {
-        fts_touch_get_xy(&last_x, &last_y);
-        data->state = LV_INDEV_STATE_PR;
+        uint16_t touch_x = 0;
+        uint16_t touch_y = 0;
+        fts_touch_get_xy(&touch_x, &touch_y);
 
-        Serial.printf("touch pressed: %d, %d\n", last_x, last_y);
+#if EPD_ROTATION == 0
+        // Landscape inverted (1440x720)
+        last_x = touch_y;
+        last_y = DISP_HEIGHT - touch_x;
+#elif EPD_ROTATION == 90
+        // Portrait inverted (720x1440)
+        last_x = DISP_HEIGHT - touch_x;
+        last_y = DISP_WIDTH - touch_y;
+#elif EPD_ROTATION == 180
+        // Landscape (1440x720)
+        last_x = DISP_WIDTH - touch_y;
+        last_y = touch_x;
+#elif EPD_ROTATION == 270
+        // Portrait (720x1440)
+        last_x = touch_x;
+        last_y = touch_y;
+#endif
+        // Ensure coordinates are within bounds
+        if(last_x < 0) last_x = 0;
+        if(last_y < 0) last_y = 0;
+        // Max bounds check is handled by LVGL clipping, but could be added here.
+
+        data->state = LV_INDEV_STATE_PR;
+        Serial.printf("touch pressed: %d, %d (raw: %d, %d)\n", last_x, last_y, touch_x, touch_y);
     }
     else {
         data->state = LV_INDEV_STATE_REL;
@@ -281,7 +299,7 @@ void idf_setup()
 #else
     epaper.clearWhite(); 
     epaper.setMode(BB_MODE_1BPP);
-    epaper.setPasses(7, 5);
+    epaper.setPasses(3, 5);
     // epaper.setPasses(7);
     // epaper.setRotation(180);
     // delay(1000);
