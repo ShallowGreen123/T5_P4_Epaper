@@ -59,7 +59,7 @@ void loop() {
     epaper.setCursor(i*50+12, 252);
     epaper.print(i, DEC);
   }
-  epaper.fullUpdate();
-  epaper.einkPower(false);
+  epaper.fullUpdate(CLEAR_SLOW, true);
+  // epaper.einkPower(false);
   while (1) {};
 }

@@ -148,7 +148,7 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 
     // full or partial update
 #if EPD_USE_4BPP_GRAY
-    epaper.fullUpdate(true, true);
+    epaper.fullUpdate(CLEAR_FAST, true);
 #else
     epaper.partialUpdate(true, y1, y2);
     // epaper.fullUpdate(true, true);

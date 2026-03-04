@@ -41,7 +41,7 @@ void setup() {
       jpg.setPixelType(EIGHT_BIT_GRAYSCALE);
       jpg.decode(0, 0, 0);
       jpg.close();
-      epaper.fullUpdate();
+      epaper.fullUpdate(true, true);
   }
 } /* setup() */ 
 

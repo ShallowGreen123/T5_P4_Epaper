@@ -122,7 +122,7 @@ void setup()
   delay(3000); // wait a few seconds before erasing the display
   epaper.clearBlack(true);
   epaper.clearWhite(true);
-  epaper.einkPower(false);
+  // epaper.einkPower(false);
   epaper.deInit();
   while (1) {}; // we're done, sit here forever
 } /* setup () */

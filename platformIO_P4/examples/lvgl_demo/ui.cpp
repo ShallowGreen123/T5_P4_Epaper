@@ -592,6 +592,9 @@ static bool get_refresh_data(void)
     ui_clock_get_time(&h, &m, &s);
     ui_clock_get_data(&year, &mont, &day, &week);
 
+    if(mont < 1 || mont > 12) mont = 1;            // 保底
+    if(week > 6) week = 0;
+
     if(h > 12) {
         lv_label_set_text_fmt(clock_ap, "%s", "P.M.");
     }  else {
@@ -607,7 +610,7 @@ static bool get_refresh_data(void)
 
     printf("%2d:%2d:%02d-%d/%d/%d\n", h, m, s, year, mont, day);
 
-    return year;
+    return year != 0;
 }
 
 static void get_timer_event(lv_timer_t *t) 
@@ -2807,7 +2810,7 @@ void menu_taskbar_update_timer_cb(lv_timer_t *t)
 }
 
 int menu_buf[] = {
-    // SCREEN1_ID, 0,
+    SCREEN1_ID, 0,
     SCREEN2_ID, SCREEN2_1_ID, SCREEN2_2_ID, SCREEN2_3_ID, 0,
     SCREEN3_ID, 0,
     // SCREEN4_ID, SCREEN4_1_ID, SCREEN4_2_ID, 0,
