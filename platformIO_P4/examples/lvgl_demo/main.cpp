@@ -23,6 +23,12 @@
 #include <SPI.h>
 #include "ui.h"
 #include "scr_mrg.h"
+#include "ft5536.h"
+#include "ExtensionIOXL9555.hpp"
+
+// I2C Pin Definition
+#define I2C_SDA_PIN 7
+#define I2C_SCL_PIN 8
 
 #define DISP_WIDTH 1440
 #define DISP_HEIGHT 720
@@ -33,7 +39,7 @@ LV_IMG_DECLARE(img_test)
 
 // 1 = 4bpp grayscale (2 pixels per byte)
 // 0 = 1bpp (1 bit per pixel)
-#define EPD_USE_4BPP_GRAY 1
+#define EPD_USE_4BPP_GRAY 0
 
 // 1 = enable ordered dithering (better gradients in 1bpp)
 // 0 = simple threshold
@@ -159,6 +165,52 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
     lv_disp_flush_ready(disp);
 }
 
+
+static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    static lv_coord_t last_x = 0;
+    static lv_coord_t last_y = 0;
+
+    /*Save the pressed coordinates and the state*/
+    if(fts_touch_is_pressed()) {
+        uint16_t touch_x = 0;
+        uint16_t touch_y = 0;
+        fts_touch_get_xy(&touch_x, &touch_y);
+
+#if EPD_ROTATION == 0
+        // Landscape inverted (1440x720)
+        last_x = touch_y;
+        last_y = DISP_HEIGHT - touch_x;
+#elif EPD_ROTATION == 90
+        // Portrait inverted (720x1440)
+        last_x = DISP_HEIGHT - touch_x;
+        last_y = DISP_WIDTH - touch_y;
+#elif EPD_ROTATION == 180
+        // Landscape (1440x720)
+        last_x = DISP_WIDTH - touch_y;
+        last_y = touch_x;
+#elif EPD_ROTATION == 270
+        // Portrait (720x1440)
+        last_x = touch_x;
+        last_y = touch_y;
+#endif
+        // Ensure coordinates are within bounds
+        if(last_x < 0) last_x = 0;
+        if(last_y < 0) last_y = 0;
+        // Max bounds check is handled by LVGL clipping, but could be added here.
+
+        data->state = LV_INDEV_STATE_PR;
+        Serial.printf("touch pressed: %d, %d (raw: %d, %d)\n", last_x, last_y, touch_x, touch_y);
+    }
+    else {
+        data->state = LV_INDEV_STATE_REL;
+    }
+
+    /*Set the last pressed coordinates*/
+    data->point.x = last_x;
+    data->point.y = last_y;
+}
+
 void lv_port_disp_init(void)
 {
     lv_init();
@@ -167,10 +219,8 @@ void lv_port_disp_init(void)
 
     lv_color_t *lv_disp_buf_1 = (lv_color_t *)ps_calloc(sizeof(lv_color_t), DISP_BUF_SIZE);
     lv_color_t *lv_disp_buf_2 = (lv_color_t *)ps_calloc(sizeof(lv_color_t), DISP_BUF_SIZE);
-    decodebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), DISP_BUF_SIZE);
     Serial.printf("epaper w = %d, h = %d\n", epaper.width(), epaper.height());
 
-    // decodebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), DISP_BUF_SIZE);
     lv_disp_draw_buf_init(&draw_buf, lv_disp_buf_1, lv_disp_buf_2, DISP_BUF_SIZE);
 
     static lv_disp_drv_t disp_drv;
@@ -187,11 +237,20 @@ void lv_port_disp_init(void)
     disp_drv.draw_buf = &draw_buf;
     disp_drv.full_refresh = 1;
     lv_disp_drv_register(&disp_drv);
+
+    /*Register a touchpad input device*/
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = touchpad_read;
+    lv_indev_drv_register(&indev_drv);
 }
+
 int tick = 0;
-BB_RECT rect; // rectangle for getting the text size
 void idf_setup()
 {
+    Serial.begin(115200);
+
     epaper.initPanel(BB_PANEL_LILYGO_T5P4, 40000000);
     epaper.setPanelSize(DISP_WIDTH, DISP_HEIGHT);
     pFramebuffer = epaper.currentBuffer();
@@ -199,24 +258,13 @@ void idf_setup()
     // epaper.fillScreen(15);
 #if EPD_USE_4BPP_GRAY
     epaper.setMode(BB_MODE_4BPP);
-    // epaper.fillRect(600, 100, 200, 200, 0x8);
-    // epaper.setFont(FONT_12x16);
-    // epaper.setTextColor(0xe);
-    // epaper.drawString("4-bpp", 670, 160);
-    // epaper.drawString("Regional Update", 610, 192);
-    // rect.x = 600;
-    // rect.y = 100;
-    // rect.h = rect.w = 200;
-    // epaper.fullUpdate(true, false, &rect); // update only the rectangle
-    // delay(3000);
 #else
     epaper.clearWhite(); 
     epaper.setMode(BB_MODE_1BPP);
     epaper.setPasses(7, 5);
-    // epaper.setPasses(7);
-    // epaper.setRotation(180);
-    // delay(1000);
 #endif
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    ft5536_check_id();
 
     lv_port_disp_init();
 

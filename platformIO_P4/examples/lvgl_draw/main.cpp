@@ -47,7 +47,6 @@
 #define EPD_ROTATION 0
 
 FASTEPD epaper;
-uint8_t *decodebuffer = NULL;
 uint8_t *pFramebuffer;
 // LVGL
 extern void ui_entry(void);
@@ -213,10 +212,8 @@ void lv_port_disp_init(void)
 
     lv_color_t *lv_disp_buf_1 = (lv_color_t *)ps_calloc(sizeof(lv_color_t), DISP_BUF_SIZE);
     lv_color_t *lv_disp_buf_2 = (lv_color_t *)ps_calloc(sizeof(lv_color_t), DISP_BUF_SIZE);
-    decodebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), DISP_BUF_SIZE);
     Serial.printf("epaper w = %d, h = %d\n", epaper.width(), epaper.height());
 
-    // decodebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), DISP_BUF_SIZE);
     lv_disp_draw_buf_init(&draw_buf, lv_disp_buf_1, lv_disp_buf_2, DISP_BUF_SIZE);
 
     static lv_disp_drv_t disp_drv;

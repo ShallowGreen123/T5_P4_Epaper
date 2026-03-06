@@ -2844,7 +2844,8 @@ void ui_entry(void)
     taskbar_update_timer = lv_timer_create(menu_taskbar_update_timer_cb, 1000, NULL);
     lv_timer_pause(taskbar_update_timer);
 
-    lv_timer_create(ui_auto_timer_cb, 3000, NULL);
+    // auto test
+    // lv_timer_create(ui_auto_timer_cb, 3000, NULL);
 
     scr_mgr_init();
     scr_mgr_set_bg_color(EPD_COLOR_BG);
