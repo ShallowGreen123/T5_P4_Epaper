@@ -227,7 +227,9 @@ void loop()
     uint32_t now = millis();
     if (now - lastReport > 2000) {
         lastReport = now;
-        DEBUG_LOG("buf free=%u filled=%u\n", audio.inBufferFree(), audio.inBufferFilled());
+        if(audio.inBufferFree() != 0) {
+            DEBUG_LOG("in buffer free=%u filled=%u\n", audio.inBufferFree(), audio.inBufferFilled());
+        }
     }
 
     bool running = audio.isRunning();
