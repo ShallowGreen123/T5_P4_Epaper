@@ -5,38 +5,6 @@
 #include "SD_MMC.h"
 #include "ExtensionIOXL9555.hpp"
 
-#define ESP32P4_FUNCTOPN_BOARD 1
-#define ESP32P4_FUNCTOPN_BOARD_USE_SPI 0
-
-#if ESP32P4_FUNCTOPN_BOARD
-
-#define BOARD_I2C_SDA (7)
-#define BOARD_I2C_SCL (8)
-
-#define BOARD_SD_MISO (39)
-#define BOARD_SD_CS (42)
-#define BOARD_SD_MOSI (44)
-#define BOARD_SD_SCK (43)
-
-#define SD_D0 39
-#define SD_D1 40
-#define SD_D2 41
-#define SD_D3 42
-#define SD_CMD 44
-#define SD_CLK 43
-
-// ES8311
-#define BOARD_I2C_ADDR_ES8311 (0x18)
-#define BOARD_ES8311_SCL (BOARD_I2C_SCL)
-#define BOARD_ES8311_SDA (BOARD_I2C_SDA)
-#define BOARD_ES8311_MCLK (13)
-#define BOARD_ES8311_SCLK (12)
-#define BOARD_ES8311_ASDOUT (9)
-#define BOARD_ES8311_LRCK (10)
-#define BOARD_ES8311_DSDIN (11)
-#define BOARD_ES8311_PA (53)
-
-#else
 // ES8311 I2C
 #define I2C_SDA 7
 #define I2C_SCL 8
@@ -64,13 +32,80 @@
 #define BOARD_SD_SCK (45)
 #define BOARD_SD_MOSI (46)
 
-#endif
+// debug helper
+#define DEBUG_LOG(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
 
+// maximum number of tracks scanned from root
+#define MUSIC_LIST_MAX 20
+
+////////////////////////////////////////////////////////////////////////////////
+// global objects
+////////////////////////////////////////////////////////////////////////////////
 Audio audio;
 DriverPins my_pins;
 AudioBoard board(AudioDriverES8311, my_pins);
 
 ExtensionIOXL9555 io;
+// storage for filenames (with leading slash)
+String musicList[MUSIC_LIST_MAX];
+int musicCount = 0;
+int currentTrack = 0;
+
+bool isAsciiName(const String &name)
+{
+    for (size_t i = 0; i < name.length(); ++i)
+    {
+        uint8_t c = name[i];
+        if (c > 127) // non-ASCII
+            return false;
+    }
+    return true;
+}
+
+// recursively scan the given fs directory depth 1, collecting mp3s
+int scanMusicList(fs::FS &fs)
+{
+    musicCount = 0;
+    File root = fs.open("/");
+    if (!root || !root.isDirectory())
+        return 0;
+
+    File file = root.openNextFile();
+    while (file && musicCount < MUSIC_LIST_MAX)
+    {
+        if (!file.isDirectory())
+        {
+            String name = String(file.name());
+            String lower = name;
+            lower.toLowerCase();
+            if (lower.endsWith(".mp3") && isAsciiName(name))
+            {
+                String path = name;
+                if (!path.startsWith("/"))
+                    path = "/" + path;
+                musicList[musicCount++] = path;
+                DEBUG_LOG("found track %d: %s\n", musicCount - 1, path.c_str());
+            }
+        }
+        file.close();
+        file = root.openNextFile();
+    }
+    root.close();
+    return musicCount;
+}
+
+void playTrack(int idx)
+{
+    if (idx < 0 || idx >= musicCount)
+        return;
+    String &path = musicList[idx];
+    DEBUG_LOG("playing track %d -> %s\n", idx, path.c_str());
+    bool ok;
+    ok = audio.connecttoFS(SD, path.c_str());
+    if (!ok)
+        Serial.println("audio.connecttoFS failed");
+}
+
 
 void scan_i2c_device(TwoWire &i2c) // I2C 模块地址扫描函数
 {
@@ -100,11 +135,14 @@ void scan_i2c_device(TwoWire &i2c) // I2C 模块地址扫描函数
 
 bool initSDCard()
 {
-#if ESP32P4_FUNCTOPN_BOARD_USE_SPI
+    DEBUG_LOG("initSDCard\n");
     SPI.begin(BOARD_SD_SCK, BOARD_SD_MISO, BOARD_SD_MOSI, BOARD_SD_CS);
-    if (!SD.begin(BOARD_SD_CS, SPI, 40000000))
+    // use a slightly lower clock speed; some cards lose data at 40MHz
+    uint32_t spiFreq = 20000000;
+    DEBUG_LOG("starting SD.begin with %u Hz\n", spiFreq);
+    if (!SD.begin(BOARD_SD_CS, SPI, spiFreq))
     {
-        Serial.println("SD init failed");
+        Serial.println("SD init failed (SPI)");
         return false;
     }
 
@@ -115,52 +153,15 @@ bool initSDCard()
     }
     uint64_t cardSizeMB = SD.cardSize() / (1024ULL * 1024ULL);
     Serial.printf("SD card size: %llu MB\n", cardSizeMB);
-#else
-    SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0, SD_D1, SD_D2, SD_D3); // 四线SD_MMC
-    if (!SD_MMC.begin())
-    {
-        Serial.println("Card Mount Failed");
-        return false;
-    }
-    // 打印SD卡信息
-    uint8_t cardType = SD_MMC.cardType();
-    if (cardType == CARD_NONE)
-    {
-        Serial.println("No SD card attached");
-        return false;
-    }
-    Serial.print("SD Card Type: ");
-    if (cardType == CARD_MMC)
-    {
-        Serial.println("MMC");
-    }
-    else if (cardType == CARD_SD)
-    {
-        Serial.println("SDSC");
-    }
-    else if (cardType == CARD_SDHC)
-    {
-        Serial.println("SDHC");
-    }
-    else
-    {
-        Serial.println("UNKNOWN");
-    }
-    uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-    Serial.printf("SD Card Size: %lluMB\n", cardSize);
-#endif
+    DEBUG_LOG("SPI SD init succeeded\n");
     return true;
 }
 
 void setup()
 {
     Serial.begin(115200);
+    delay(100); // give serial time
 
-#if ESP32P4_FUNCTOPN_BOARD
-    // ES8311使能
-    pinMode(BOARD_ES8311_PA, OUTPUT);
-    digitalWrite(BOARD_ES8311_PA, HIGH);
-#else
     if (!io.init(Wire, BOARD_I2C_SDA, BOARD_I2C_SCL, XL9555_SLAVE_ADDRESS0))
     {
         while (1)
@@ -173,11 +174,14 @@ void setup()
     io.configPort(ExtensionIOXL9555::PORT0, 0x00);
     io.configPort(ExtensionIOXL9555::PORT1, 0x00);
     io.digitalWrite(BOARD_XL9555_05_AMPLIFIER, HIGH);
-#endif
+
     // add i2c codec pins: scl, sda, port
     my_pins.addI2C(PinFunction::CODEC, BOARD_I2C_SCL, BOARD_I2C_SDA, BOARD_I2C_ADDR_ES8311);
 
-    initSDCard();
+    if (!initSDCard())
+    {
+        Serial.println("SD card init failed, aborting");
+    }
 
     // configure codec
     CodecConfig cfg;
@@ -192,65 +196,58 @@ void setup()
 
     scan_i2c_device(Wire); // 扫描I2C设备地址
 
-    // 调用audio库实现MP3输出
+    // configure audio library and enlarge buffer to avoid overflow
     audio.setPinout(BOARD_ES8311_SCLK, BOARD_ES8311_LRCK, BOARD_ES8311_ASDOUT, BOARD_ES8311_MCLK);
     audio.setVolume(4); // 0...21
-#if ESP32P4_FUNCTOPN_BOARD_USE_SPI
-    audio.connecttoFS(SD, "Angel.mp3");
-#else
-    audio.connecttoFS(SD_MMC, "Angel.mp3");
-#endif
-    
+    // increase input buffer size (use PSRAM) to 64KB
+    audio.setInBufferSize(64 * 1024);
+    DEBUG_LOG("in buffer size now %u\n", audio.getInBufferSize());
+
+    // build playlist by scanning root
+    musicCount = scanMusicList(SD);
+
+    if (musicCount > 0)
+    {
+        currentTrack = 0;
+        playTrack(currentTrack);
+    }
+    else
+    {
+        DEBUG_LOG("no mp3 files found\n");
+    }
 }
 
 void loop()
 {
+    static bool wasRunning = false;
     audio.loop();
-}
 
-// optional
-void audio_info(const char *info)
-{
-    Serial.print("info        ");
-    Serial.println(info);
-}
-void audio_id3data(const char *info)
-{ // id3 metadata
-    Serial.print("id3data     ");
-    Serial.println(info);
-}
-void audio_eof_mp3(const char *info)
-{ // end of file
-    Serial.print("eof_mp3     ");
-    Serial.println(info);
-}
-void audio_showstation(const char *info)
-{
-    Serial.print("station     ");
-    Serial.println(info);
-}
-void audio_showstreamtitle(const char *info)
-{
-    Serial.print("streamtitle ");
-    Serial.println(info);
-}
-void audio_bitrate(const char *info)
-{
-    Serial.print("bitrate     ");
-    Serial.println(info);
-}
-void audio_commercial(const char *info)
-{ // duration in sec
-    Serial.print("commercial  ");
-    Serial.println(info);
-}
-void audio_icyurl(const char *info)
-{ // homepage
-    Serial.print("icyurl      ");
-    Serial.println(info);
-}
-void audio_lasthost(const char *info)
-{ // stream URL played
-    Serial.print("lasthost    ");
-    Serial.println(info);
+    // debug buffer levels occasionally
+    static uint32_t lastReport = 0;
+    uint32_t now = millis();
+    if (now - lastReport > 2000) {
+        lastReport = now;
+        DEBUG_LOG("buf free=%u filled=%u\n", audio.inBufferFree(), audio.inBufferFilled());
+    }
+
+    bool running = audio.isRunning();
+    if (running && !wasRunning)
+        Serial.println("=== playback started ===");
+    if (!running && wasRunning)
+    {
+        Serial.println("=== playback stopped ===");
+        if (musicCount > 0)
+        {
+            // advance to next track
+            currentTrack = (currentTrack + 1) % musicCount;
+            Serial.printf("next track index %d\n", currentTrack);
+            playTrack(currentTrack);
+    
+        }
+        else
+        {
+            DEBUG_LOG("no mp3 files found\n");
+        }
+    }
+    wasRunning = running;
 }

@@ -117,9 +117,19 @@ size_t AudioBuffer::getMaxAvailableBytes() {
 
 void AudioBuffer::bytesWritten(size_t bw) {
     if(!bw) return;
-    m_writePtr += bw;
-    if(m_writePtr == m_endPtr) { m_writePtr = m_buffer.get(); }
-    if(m_writePtr > m_endPtr) log_e("AudioBuffer: m_writePtr %i > m_endPtr %i", m_writePtr, m_endPtr);
+    // advance write pointer by bw bytes, wrapping correctly around buffer
+    size_t spaceToEnd = m_endPtr - m_writePtr;
+    if(bw < spaceToEnd) {
+        m_writePtr += bw;
+    } else if(bw == spaceToEnd) {
+        // exactly reached end, wrap to start
+        m_writePtr = m_buffer.get();
+    } else {
+        // would overflow buffer, wrap and log
+        size_t overflow = bw - spaceToEnd;
+        log_e("AudioBuffer overflow: write %u bytes with only %u space, wrapping", (unsigned)bw, (unsigned)spaceToEnd);
+        m_writePtr = m_buffer.get() + (overflow % m_buffSize);
+    }
     m_f_isEmpty = false;
 }
 
