@@ -7,6 +7,7 @@ extern "C" {
 
 #include "lvgl.h"
 
+LV_IMG_DECLARE(img_adjust)
 LV_IMG_DECLARE(img_battery)
 LV_IMG_DECLARE(img_clock)
 LV_IMG_DECLARE(img_gps)

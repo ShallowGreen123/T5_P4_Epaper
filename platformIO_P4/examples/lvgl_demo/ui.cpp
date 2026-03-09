@@ -17,6 +17,24 @@ static int scr_refresh_mode;
 static lv_timer_t *taskbar_update_timer = NULL;
 uint16_t taskbar_statue[TASKBAR_ID_MAX] = {0};
 struct tm timeinfo = {0};
+
+const struct menu_icon icon_buf[] = {
+    {&img_clock,    "clock"   , 45,   45  }, 
+    {&img_lora,     "lora"    , 210,  45  },
+    {&img_sd_card,  "sd card" , 375,  45  },
+    {&img_setting,  "setting" , 45,   250 },
+    {&img_test,     "test"    , 210,  250 },
+    {&img_wifi,     "wifi"    , 375,  250 },
+    {&img_battery,  "battery" , 45,   455 },
+    {&img_gps,      "gps",      210,  455 },
+    {&img_adjust,   "adjust",   375,  455 },
+};
+
+const struct menu_icon icon_buf2[] = {
+    {&img_shutdown, "shutdown", 45,  45 },
+    {&img_sleep,    "sleep" ,   210, 45 },
+};
+
 //************************************[ Other fun ]******************************************
 #if 1
 void scr_back_btn_create(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
@@ -251,23 +269,6 @@ void ui_list_btn_create(lv_obj_t *parent, lv_event_cb_t event_cb)
 #endif
 //************************************[ screen 0 ]****************************************** menu
 #if 1
-const struct menu_icon icon_buf[] = {
-    {&img_clock,    "clock"   , 45,   45  }, 
-    {&img_lora,     "lora"    , 210,  45  },
-    {&img_sd_card,  "sd card" , 375,  45  },
-    {&img_setting,  "setting" , 45,   250 },
-    {&img_test,     "test"    , 210,  250 },
-    {&img_wifi,     "wifi"    , 375,  250 },
-    {&img_battery,  "battery" , 45,   455 },
-    {&img_gps,      "gps",      210,  455 },
-    // {&img_refresh,  "refresh" , 375,  455 },
-};
-
-const struct menu_icon icon_buf2[] = {
-    {&img_shutdown, "shutdown", 45,  45 },
-    {&img_sleep,    "sleep" ,   210, 45 },
-};
-
 static lv_obj_t *ui_Panel4;
 static lv_obj_t *menu_screen1;
 static lv_obj_t *menu_screen2;
@@ -359,6 +360,7 @@ static void menu_btn_event(lv_event_t *e)
          * 5 --- SCREEN6_ID  --- wifi
          * 6 --- SCREEN7_ID  --- battery
          * 7 --- SCREEN10_ID --- gps
+         * 8 --- SCREEN11_ID --- adjust
          ************ page2 ************
          * 8 --- SCREEN8_ID  --- shutdown
          * 9 --- SCREEN9_ID  --- sleep
@@ -372,8 +374,9 @@ static void menu_btn_event(lv_event_t *e)
             case 5: scr_mgr_push(SCREEN6_ID, false); break;
             case 6: scr_mgr_push(SCREEN7_ID, false); break;
             case 7: scr_mgr_push(SCREEN10_ID, false); break;
-            case 8: scr_mgr_push(SCREEN8_ID, false); break;
-            case 9: scr_mgr_push(SCREEN9_ID, false); break;
+            case 8: scr_mgr_push(SCREEN11_ID, false); break;
+            case 9: scr_mgr_push(SCREEN8_ID, false); break;
+            case 10: scr_mgr_push(SCREEN9_ID, false); break;
             default: break;
         }
     }
@@ -2738,6 +2741,37 @@ static scr_lifecycle_t screen9 = {
     .destroy = destroy9,
 };
 #endif
+//************************************[ screen 11 ]****************************************** adjust
+#if 1
+static void scr11_btn_event_cb(lv_event_t * e)
+{
+    if(e->code == LV_EVENT_CLICKED){
+        // ui_full_refresh();
+        scr_mgr_pop(false);
+    }
+}
+
+static void create11(lv_obj_t *parent)
+{
+    scr_back_btn_create(parent, "Adjust", scr11_btn_event_cb);
+}
+
+static void entry11(void) {
+    
+}
+static void exit11(void) {
+}
+static void destroy11(void) { 
+
+}
+
+static scr_lifecycle_t screen11 = {
+    .create = create11,
+    .entry = entry11,
+    .exit  = exit11,
+    .destroy = destroy11,
+};
+#endif
 //************************************[ UI ENTRY ]******************************************
 static lv_obj_t *menu_keypad;
 static lv_timer_t *menu_timer = NULL;
@@ -2865,6 +2899,7 @@ void ui_entry(void)
     scr_mgr_register(SCREEN8_ID,   &screen8);   // shutdown
     scr_mgr_register(SCREEN9_ID,   &screen9);   // sleep
     scr_mgr_register(SCREEN10_ID,  &screen10);  // gps
+    scr_mgr_register(SCREEN11_ID,  &screen11);  // adjust
 
     scr_mgr_switch(SCREEN0_ID, false); // set root screen
     scr_mgr_set_anim(LV_SCR_LOAD_ANIM_NONE, LV_SCR_LOAD_ANIM_NONE, LV_SCR_LOAD_ANIM_NONE);

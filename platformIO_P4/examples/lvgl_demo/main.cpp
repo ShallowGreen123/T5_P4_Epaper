@@ -39,7 +39,7 @@ LV_IMG_DECLARE(img_test)
 
 // 1 = 4bpp grayscale (2 pixels per byte)
 // 0 = 1bpp (1 bit per pixel)
-#define EPD_USE_4BPP_GRAY 0
+#define EPD_USE_4BPP_GRAY 1
 
 // 1 = enable ordered dithering (better gradients in 1bpp)
 // 0 = simple threshold
@@ -50,6 +50,12 @@ LV_IMG_DECLARE(img_test)
 #define EPD_MIRROR_MODE 0
 // EPD_ROTATION: 0, 90, 180, 270 (rotation applied when writing to panel buffer)
 #define EPD_ROTATION 0
+
+// 4bpp update strategy:
+// 0 = always flashing full refresh (legacy behavior)
+// 1 = first refresh uses CLEAR_SLOW, then CLEAR_NONE to reduce flashing
+#define EPD_4BPP_LOW_FLASH 1
+
 
 FASTEPD epaper;
 uint8_t *decodebuffer = NULL;
@@ -154,7 +160,24 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 
     // full or partial update
 #if EPD_USE_4BPP_GRAY
-    epaper.fullUpdate(CLEAR_FAST, true);
+    if (lv_disp_flush_is_last(disp))
+    {
+#if EPD_4BPP_LOW_FLASH
+        static bool s_first_4bpp_refresh = true;
+        if (s_first_4bpp_refresh)
+        {
+            // Do one strong clear pass after boot, then use no-clear updates.
+            epaper.fullUpdate(CLEAR_SLOW, true);
+            s_first_4bpp_refresh = false;
+        }
+        else
+        {
+            epaper.fullUpdate(CLEAR_NONE, true);
+        }
+#else
+        epaper.fullUpdate(CLEAR_SLOW, true);
+#endif
+    }
 #else
     epaper.partialUpdate(true, y1, y2);
     // epaper.fullUpdate(true, true);
