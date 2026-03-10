@@ -1990,12 +1990,59 @@ lv_obj_t *wifi_st_lab = NULL;
 lv_obj_t *ip_lab = NULL;
 lv_obj_t *ssid_lab = NULL;
 lv_obj_t *pwd_lab = NULL;
+lv_obj_t *wifi_scan_summary_lab = NULL;
+lv_obj_t *wifi_scan_list = NULL;
+lv_obj_t *wifi_scan_btn_label = NULL;
 static lv_timer_t   *wifi_rssi_timer            = NULL;
 
 static volatile bool smartConfigStart      = false;
 static lv_timer_t   *wifi_timer            = NULL;
 static uint32_t      wifi_timer_counter    = 0;
 static uint32_t      wifi_connnect_timeout = 60;
+
+static void wifi_scan_refresh_ui(void)
+{
+    if (wifi_st_lab) {
+        lv_label_set_text(wifi_st_lab, ui_wifi_get_state_text());
+    }
+    if (wifi_scan_summary_lab) {
+        lv_label_set_text(wifi_scan_summary_lab, ui_wifi_get_summary());
+    }
+
+    if (!wifi_scan_list) {
+        return;
+    }
+
+    lv_obj_clean(wifi_scan_list);
+    const int count = ui_wifi_get_scan_count();
+    if (count <= 0) {
+        lv_obj_t *empty = lv_label_create(wifi_scan_list);
+        lv_obj_set_width(empty, LV_PCT(100));
+        lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
+        lv_label_set_text(empty, ui_wifi_scan_busy() ? "Scanning..." : "No scan results yet.");
+        lv_obj_set_style_text_font(empty, &Font_Mono_Bold_20, LV_PART_MAIN);
+        lv_obj_set_style_text_color(empty, lv_color_black(), LV_PART_MAIN);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        lv_obj_t *item = lv_obj_class_create_obj(&lv_list_btn_class, wifi_scan_list);
+        lv_obj_class_init_obj(item);
+        lv_obj_set_size(item, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_height(item, 58);
+        lv_obj_set_style_bg_color(item, lv_color_hex(EPD_COLOR_BG), LV_PART_MAIN);
+        lv_obj_set_style_border_width(item, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(item, 18, LV_PART_MAIN);
+
+        lv_obj_t *label = lv_label_create(item);
+        lv_obj_set_width(label, LV_PCT(100));
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_label_set_text(label, ui_wifi_get_scan_item(i));
+        lv_obj_set_style_text_font(label, &Font_Mono_Bold_20, LV_PART_MAIN);
+        lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+        lv_obj_center(label);
+    }
+}
 
 static void wifi_info_label_create(lv_obj_t *parent)
 {
@@ -2020,10 +2067,9 @@ static void wifi_info_label_create(lv_obj_t *parent)
 
 static void wifi_rssi_update_timer(lv_timer_t *t)
 {
-    if(ui_wifi_get_status())
-    {
-        // lv_label_set_text_fmt(pwd_lab, "rssi: %ddB", WiFi.RSSI());
-    }
+    (void)t;
+    ui_wifi_scan_poll();
+    wifi_scan_refresh_ui();
 }
 
 // static void wifi_config_event_handler(lv_event_t *e)
@@ -2129,91 +2175,76 @@ static void scr6_btn_event_cb(lv_event_t * e)
     }
 }
 
+static void wifi_scan_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    ui_wifi_scan_start();
+    if (wifi_scan_btn_label) {
+        lv_label_set_text(wifi_scan_btn_label, ui_wifi_scan_busy() ? "Scanning..." : "Rescan");
+    }
+    wifi_scan_refresh_ui();
+}
+
 static void create6(lv_obj_t *parent) 
 {
     ui_set_rotation(LV_DISP_ROT_270);
 
     scr6_root = parent;
     wifi_st_lab = lv_label_create(parent);
-    lv_obj_set_width(wifi_st_lab, 360);
-    // lv_obj_set_style_text_color(wifi_st_lab, lv_color_hex(COLOR_TEXT), LV_PART_MAIN);
+    lv_obj_set_width(wifi_st_lab, 520);
     lv_obj_set_style_text_font(wifi_st_lab, &Font_Mono_Bold_25, LV_PART_MAIN);
-    lv_label_set_text(wifi_st_lab, (ui_wifi_get_status() ? "Wifi Connect" : "Wifi Disconnect"));
+    lv_label_set_text(wifi_st_lab, ui_wifi_get_state_text());
     lv_obj_set_style_text_align(wifi_st_lab, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_align(wifi_st_lab, LV_ALIGN_BOTTOM_RIGHT, -0, -190);
+    lv_obj_align(wifi_st_lab, LV_ALIGN_TOP_LEFT, 50, 80);
 
-    if(ui_wifi_get_status()) {
-        wifi_info_label_create(parent);
-    }
+    wifi_scan_summary_lab = lv_label_create(parent);
+    lv_obj_set_width(wifi_scan_summary_lab, 980);
+    lv_label_set_long_mode(wifi_scan_summary_lab, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(wifi_scan_summary_lab, ui_wifi_get_summary());
+    lv_obj_set_style_text_font(wifi_scan_summary_lab, &Font_Mono_Bold_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(wifi_scan_summary_lab, lv_color_black(), LV_PART_MAIN);
+    lv_obj_align_to(wifi_scan_summary_lab, wifi_st_lab, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 18);
 
-    lv_obj_t *label, *tips_label;
-    tips_label = lv_label_create(parent);
-    lv_obj_set_width(tips_label, LV_PCT(100));
-    lv_label_set_long_mode(tips_label, LV_LABEL_LONG_SCROLL);
-    lv_obj_set_style_text_color(tips_label, lv_color_black(), LV_PART_MAIN);
-    lv_label_set_text(tips_label,   "1. Scan the QR code to download `EspTouch`\n"
-                                    "2. Install and launch `EspTouch` APP\n"
-                                    "3. Make sure your phone is connected to WIFI\n"
-                                    "4. Tap the [EspTouch] option of the APP\n"
-                                    "5. Enter your WIFI password and click [confirm]\n"
-                                    "6. Finally, click [config wifi] on the ink screen\n"
-                                    "After that, wait for the network distribution to succeed!"
-                                    );
+    wifi_scan_list = lv_list_create(parent);
+    lv_obj_set_size(wifi_scan_list, 980, 400);
+    lv_obj_align_to(wifi_scan_list, wifi_scan_summary_lab, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 18);
+    lv_obj_set_style_bg_color(wifi_scan_list, lv_color_hex(EPD_COLOR_BG), LV_PART_MAIN);
+    lv_obj_set_style_border_width(wifi_scan_list, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(wifi_scan_list, 24, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(wifi_scan_list, 12, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(wifi_scan_list, LV_SCROLLBAR_MODE_OFF);
 
-    
-    lv_obj_set_style_text_font(tips_label, &Font_Mono_Bold_25, LV_PART_MAIN);
-    lv_obj_align(tips_label, LV_ALIGN_LEFT_MID, 50, -100);
-
-    const char *android_url = "https://github.com/EspressifApp/EsptouchForAndroid/releases/tag/v2.0.0/esptouch-v2.0.0.apk";
-    const char *ios_url     = "https://apps.apple.com/cn/app/espressif-esptouch/id1071176700";
-
-    lv_coord_t size            = 120;
-    lv_obj_t  *android_rq_code = lv_qrcode_create(parent, size, lv_color_black(), lv_color_white());
-    lv_qrcode_update(android_rq_code, android_url, strlen(android_url));
-    lv_obj_set_pos(android_rq_code, 340, 10);
-    lv_obj_align(android_rq_code, LV_ALIGN_LEFT_MID, 50, 100);
-
-    lv_obj_set_style_border_color(android_rq_code, lv_color_white(), 0);
-    lv_obj_set_style_border_width(android_rq_code, 5, 0);
-    label = lv_label_create(parent);
-    lv_label_set_text(label, "Android");
-    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
-    lv_obj_align_to(label, android_rq_code, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
-
-    lv_obj_t *ios_rq_code = lv_qrcode_create(parent, size, lv_color_black(), lv_color_white());
-    lv_qrcode_update(ios_rq_code, ios_url, strlen(ios_url));
-    lv_obj_align_to(ios_rq_code, android_rq_code, LV_ALIGN_OUT_RIGHT_MID, 20, 0);
-
-    lv_obj_set_style_border_color(ios_rq_code, lv_color_white(), 0);
-    lv_obj_set_style_border_width(ios_rq_code, 5, 0);
-    label = lv_label_create(parent);
-    lv_label_set_text(label, "IOS");
-    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
-    lv_obj_align_to(label, ios_rq_code, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
-
-    // config btn
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, 200, 60);
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, -20, -120);
+    lv_obj_set_size(btn, 220, 62);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_RIGHT, -80, -60);
     lv_obj_set_style_radius(btn, 10, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
-    label = lv_label_create(btn);
-    lv_label_set_text(label, "Config Wifi");
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_set_style_text_font(label, &Font_Mono_Bold_25, LV_PART_MAIN);
-    lv_obj_center(label);
-    // lv_obj_add_event_cb(btn, wifi_config_event_handler, LV_EVENT_CLICKED, NULL);
+    wifi_scan_btn_label = lv_label_create(btn);
+    lv_label_set_text(wifi_scan_btn_label, "Scan WiFi");
+    lv_obj_set_style_text_align(wifi_scan_btn_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(wifi_scan_btn_label, &Font_Mono_Bold_25, LV_PART_MAIN);
+    lv_obj_center(wifi_scan_btn_label);
+    lv_obj_add_event_cb(btn, wifi_scan_btn_event_cb, LV_EVENT_CLICKED, NULL);
     
     //---------------------
     // scr_middle_line(parent);
     // back
     scr_back_btn_create(parent, "Wifi", scr6_btn_event_cb);
+    wifi_scan_refresh_ui();
 }
 static void entry6(void) 
 {
     ui_setting_get_refresh_speed(&scr_refresh_mode);
 
-    wifi_rssi_timer = lv_timer_create(wifi_rssi_update_timer, 3000, NULL);
+    wifi_rssi_timer = lv_timer_create(wifi_rssi_update_timer, 5000, NULL);
+    ui_wifi_scan_start();
+    wifi_scan_refresh_ui();
+    if (wifi_scan_btn_label) {
+        lv_label_set_text(wifi_scan_btn_label, ui_wifi_scan_busy() ? "Scanning..." : "Rescan");
+    }
 }
 static void exit6(void) 
 {

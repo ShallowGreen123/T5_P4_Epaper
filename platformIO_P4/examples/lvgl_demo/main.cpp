@@ -262,11 +262,11 @@ void lv_port_disp_init(void)
     lv_disp_drv_register(&disp_drv);
 
     /*Register a touchpad input device*/
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = touchpad_read;
-    lv_indev_drv_register(&indev_drv);
+    // static lv_indev_drv_t indev_drv;
+    // lv_indev_drv_init(&indev_drv);
+    // indev_drv.type = LV_INDEV_TYPE_POINTER;
+    // indev_drv.read_cb = touchpad_read;
+    // lv_indev_drv_register(&indev_drv);
 }
 
 int tick = 0;
@@ -304,4 +304,20 @@ void idf_loop()
         tick = 0;
 
     }
+}
+
+void setup()
+{
+    if (psramInit()) {
+        Serial.println("\nThe PSRAM is correctly initialized");
+    } else {
+        Serial.println("\nPSRAM does not work");
+    }
+
+    idf_setup();
+}
+
+void loop()
+{
+    idf_loop();
 }

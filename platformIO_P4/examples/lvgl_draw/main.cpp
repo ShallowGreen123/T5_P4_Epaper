@@ -34,11 +34,17 @@
 
 // 1 = 4bpp grayscale (2 pixels per byte)
 // 0 = 1bpp (1 bit per pixel)
-#define EPD_USE_4BPP_GRAY 1
+#define EPD_USE_4BPP_GRAY 0
 
 // 1 = enable ordered dithering (better gradients in 1bpp)
 // 0 = simple threshold
 #define EPD_ENABLE_DITHER 1
+// 1bpp quality/speed tuning
+// More partial passes = cleaner transitions, but slower updates.
+#define EPD_1BPP_PARTIAL_PASSES 3
+#define EPD_1BPP_FULL_PASSES 5
+// Stronger full refresh pass count used only for "Clear" key deep clean.
+#define EPD_1BPP_CLEAR_FULL_PASSES 7
 
 // Mirror controls for LVGL flush
 // EPD_MIRROR_MODE: 0 = normal, 1 = mirror X, 2 = mirror Y, 3 = mirror X+Y (180 deg)
@@ -53,8 +59,14 @@
 
 FASTEPD epaper;
 uint8_t *pFramebuffer;
+static volatile bool g_request_clean_refresh = false;
 // LVGL
 extern void ui_entry(void);
+
+void epd_request_clean_refresh(void)
+{
+    g_request_clean_refresh = true;
+}
 
 static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
@@ -70,6 +82,8 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
     const int32_t pitch = DISP_WIDTH / 2; // 4bpp: 2 pixels per byte
 #else
     const int32_t pitch = (DISP_WIDTH + 7) / 8; // 1bpp: 8 pixels per byte
+    int32_t dirty_min_dst_y = DISP_HEIGHT;
+    int32_t dirty_max_dst_y = -1;
     static const uint8_t bayer4[4][4] = {
         {0, 8, 2, 10},
         {12, 4, 14, 6},
@@ -148,6 +162,8 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
             {
                 pFramebuffer[idx] &= (uint8_t)~mask; // black
             }
+            if (dst_y < dirty_min_dst_y) dirty_min_dst_y = dst_y;
+            if (dst_y > dirty_max_dst_y) dirty_max_dst_y = dst_y;
 #endif
         }
     }
@@ -172,7 +188,32 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 #endif
     }
 #else
-    epaper.partialUpdate(true, y1, y2);
+    static bool s_pending_1bpp = false;
+    static int32_t s_pending_y1 = DISP_HEIGHT;
+    static int32_t s_pending_y2 = -1;
+
+    if (dirty_max_dst_y >= dirty_min_dst_y)
+    {
+        if (!s_pending_1bpp)
+        {
+            s_pending_y1 = dirty_min_dst_y;
+            s_pending_y2 = dirty_max_dst_y;
+            s_pending_1bpp = true;
+        }
+        else
+        {
+            if (dirty_min_dst_y < s_pending_y1) s_pending_y1 = dirty_min_dst_y;
+            if (dirty_max_dst_y > s_pending_y2) s_pending_y2 = dirty_max_dst_y;
+        }
+    }
+
+    if (lv_disp_flush_is_last(disp) && s_pending_1bpp)
+    {
+        epaper.partialUpdate(true, s_pending_y1, s_pending_y2);
+        s_pending_1bpp = false;
+        s_pending_y1 = DISP_HEIGHT;
+        s_pending_y2 = -1;
+    }
     // epaper.fullUpdate(true, true);
 #endif
     // epaper.einkPower(true);
@@ -250,7 +291,7 @@ void lv_port_disp_init(void)
     disp_drv.flush_cb = disp_flush;
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf;
-    disp_drv.full_refresh = 1;
+    disp_drv.full_refresh = 0;
     lv_disp_drv_register(&disp_drv);
 
     /*Register a touchpad input device*/
@@ -318,7 +359,7 @@ void idf_setup()
 #else
     epaper.clearWhite(); 
     epaper.setMode(BB_MODE_1BPP);
-    epaper.setPasses(3, 5);
+    epaper.setPasses(EPD_1BPP_PARTIAL_PASSES, EPD_1BPP_FULL_PASSES);
     // epaper.setPasses(7);
     // epaper.setRotation(180);
     // delay(1000);
@@ -340,6 +381,21 @@ void idf_loop()
 {
     // lv_task_handler();
     lv_timer_handler();
+
+    if (g_request_clean_refresh)
+    {
+        g_request_clean_refresh = false;
+        // Ensure latest LVGL state is flushed to panel buffer before full refresh.
+        lv_refr_now(lv_disp_get_default());
+#if EPD_USE_4BPP_GRAY
+        epaper.fullUpdate(CLEAR_SLOW, true);
+#else
+        epaper.setPasses(EPD_1BPP_PARTIAL_PASSES, EPD_1BPP_CLEAR_FULL_PASSES);
+        epaper.fullUpdate(CLEAR_SLOW, true);
+        epaper.setPasses(EPD_1BPP_PARTIAL_PASSES, EPD_1BPP_FULL_PASSES);
+#endif
+    }
+
     delay(1);
 
     
@@ -347,7 +403,7 @@ void idf_loop()
     if (tick++ > 50)
     {
         tick = 0;
-        // scanI2CBus();
+        scanI2CBus();
         // fts_touch_process();
         
     }

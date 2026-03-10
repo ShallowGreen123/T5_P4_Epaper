@@ -70,7 +70,13 @@ const char *ui_test_get_BQ27220(int *ret_n);
 // wifi
 bool ui_wifi_get_status(void);
 void ui_wifi_set_status(bool statue);
-
+bool ui_wifi_scan_start(void);
+void ui_wifi_scan_poll(void);
+bool ui_wifi_scan_busy(void);
+const char *ui_wifi_get_state_text(void);
+const char *ui_wifi_get_summary(void);
+int ui_wifi_get_scan_count(void);
+const char *ui_wifi_get_scan_item(int index);
 String ui_wifi_get_ip(void);
 const char *ui_wifi_get_ssid(void);
 const char *ui_wifi_get_pwd(void);

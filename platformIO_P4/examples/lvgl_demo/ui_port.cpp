@@ -1,6 +1,105 @@
 #include "ui.h"
 #include "Arduino.h"
 #include "ui_port.h"
+#include <RemoteWiFiHosted.h>
+
+namespace {
+enum UiWifiState {
+    UI_WIFI_STATE_IDLE = 0,
+    UI_WIFI_STATE_READY,
+    UI_WIFI_STATE_SCANNING,
+    UI_WIFI_STATE_DONE,
+    UI_WIFI_STATE_ERROR,
+};
+
+constexpr int kUiWifiMaxItems = 12;
+constexpr size_t kUiWifiLineLen = 96;
+
+bool g_wifi_status = false;
+bool g_wifi_initialized = false;
+UiWifiState g_wifi_state = UI_WIFI_STATE_IDLE;
+int g_wifi_scan_count = 0;
+char g_wifi_state_text[64] = "WiFi idle";
+char g_wifi_summary[128] = "Tap scan to search nearby APs.";
+char g_wifi_ssid[64] = "Not connected";
+char g_wifi_pwd[64] = "-";
+char g_wifi_ip[64] = "Scan only mode";
+char g_wifi_lines[kUiWifiMaxItems][kUiWifiLineLen] = {};
+
+void ui_wifi_clear_items() {
+    for (int i = 0; i < kUiWifiMaxItems; ++i) {
+        g_wifi_lines[i][0] = '\0';
+    }
+    g_wifi_scan_count = 0;
+}
+
+void ui_wifi_set_state(UiWifiState state, const char *text) {
+    g_wifi_state = state;
+    strlcpy(g_wifi_state_text, text, sizeof(g_wifi_state_text));
+}
+
+bool ui_wifi_ensure_ready() {
+    if (g_wifi_initialized) {
+        return true;
+    }
+
+    ui_wifi_set_state(UI_WIFI_STATE_IDLE, "Initializing remote WiFi...");
+    if (!RemoteWiFi.begin()) {
+        g_wifi_status = false;
+        ui_wifi_set_state(UI_WIFI_STATE_ERROR, "Remote WiFi init failed");
+        strlcpy(g_wifi_summary, "Check C6 power, SDIO wiring, and esp-hosted slave firmware.", sizeof(g_wifi_summary));
+        return false;
+    }
+
+    g_wifi_initialized = true;
+    g_wifi_status = true;
+    ui_wifi_set_state(UI_WIFI_STATE_READY, "Remote WiFi ready");
+
+    HostedVersion host {};
+    HostedVersion slave {};
+    if (RemoteWiFi.getHostedVersions(host, slave)) {
+        snprintf(
+            g_wifi_summary,
+            sizeof(g_wifi_summary),
+            "Hosted %lu.%lu.%lu / C6 %lu.%lu.%lu",
+            (unsigned long)host.major,
+            (unsigned long)host.minor,
+            (unsigned long)host.patch,
+            (unsigned long)slave.major,
+            (unsigned long)slave.minor,
+            (unsigned long)slave.patch
+        );
+    } else {
+        strlcpy(g_wifi_summary, "Remote WiFi ready.", sizeof(g_wifi_summary));
+    }
+
+    return true;
+}
+
+void ui_wifi_fill_scan_items(int found) {
+    ui_wifi_clear_items();
+
+    if (found <= 0) {
+        strlcpy(g_wifi_summary, "No AP found.", sizeof(g_wifi_summary));
+        return;
+    }
+
+    g_wifi_scan_count = found > kUiWifiMaxItems ? kUiWifiMaxItems : found;
+    snprintf(g_wifi_summary, sizeof(g_wifi_summary), "Found %d AP(s), showing top %d.", found, g_wifi_scan_count);
+    for (int i = 0; i < g_wifi_scan_count; ++i) {
+        snprintf(
+            g_wifi_lines[i],
+            sizeof(g_wifi_lines[i]),
+            "%02d  %2ldch  %4lddBm  %-9s  %s",
+            i + 1,
+            (long)RemoteWiFi.channel(i),
+            (long)RemoteWiFi.RSSI(i),
+            RemoteWiFi.encryptionTypeStr(RemoteWiFi.encryptionType(i)).c_str(),
+            RemoteWiFi.SSID(i).c_str()
+        );
+    }
+}
+}  // namespace
 
 int ui_setting_backlight = 3; // 0 - 3
 int epd_vcom_default = 1000;
@@ -356,28 +455,98 @@ const char *ui_test_get_BQ27220(int *ret_n)
 //************************************[ screen 6 ]****************************************** wifi
 bool ui_wifi_get_status(void)
 {
-    // return peri_buf[E_PERI_WIFI];
-    return false;
+    return g_wifi_status;
 }
 void ui_wifi_set_status(bool statue)
 {
-    // peri_buf[E_PERI_WIFI] = statue;
+    g_wifi_status = statue;
+}
+
+bool ui_wifi_scan_start(void)
+{
+    if (!ui_wifi_ensure_ready()) {
+        return false;
+    }
+
+    ui_wifi_clear_items();
+    ui_wifi_set_state(UI_WIFI_STATE_SCANNING, "Scanning...");
+    strlcpy(g_wifi_summary, "Scanning nearby APs via ESP32-C6...", sizeof(g_wifi_summary));
+
+    const int16_t result = RemoteWiFi.scanNetworks(true, true, false, 300);
+    if (result == WIFI_SCAN_RUNNING) {
+        return true;
+    }
+    if (result >= 0) {
+        ui_wifi_fill_scan_items(result);
+        ui_wifi_set_state(UI_WIFI_STATE_DONE, "Scan complete");
+        return true;
+    }
+
+    ui_wifi_set_state(UI_WIFI_STATE_ERROR, "Scan start failed");
+    strlcpy(g_wifi_summary, "Failed to start scan.", sizeof(g_wifi_summary));
+    return false;
+}
+
+void ui_wifi_scan_poll(void)
+{
+    if (g_wifi_state != UI_WIFI_STATE_SCANNING) {
+        return;
+    }
+
+    const int16_t result = RemoteWiFi.scanComplete();
+    if (result == WIFI_SCAN_RUNNING) {
+        return;
+    }
+
+    if (result >= 0) {
+        ui_wifi_fill_scan_items(result);
+        ui_wifi_set_state(UI_WIFI_STATE_DONE, "Scan complete");
+        return;
+    }
+
+    ui_wifi_set_state(UI_WIFI_STATE_ERROR, "Scan failed");
+    strlcpy(g_wifi_summary, "Scan failed or timed out.", sizeof(g_wifi_summary));
+}
+
+bool ui_wifi_scan_busy(void)
+{
+    return g_wifi_state == UI_WIFI_STATE_SCANNING;
+}
+
+const char *ui_wifi_get_state_text(void)
+{
+    return g_wifi_state_text;
+}
+
+const char *ui_wifi_get_summary(void)
+{
+    return g_wifi_summary;
+}
+
+int ui_wifi_get_scan_count(void)
+{
+    return g_wifi_scan_count;
+}
+
+const char *ui_wifi_get_scan_item(int index)
+{
+    if (index < 0 || index >= g_wifi_scan_count) {
+        return "";
+    }
+    return g_wifi_lines[index];
 }
 
 String ui_wifi_get_ip(void)
 {
-    // return WiFi.localIP().toString();
-    return "WIFI not connected";
+    return String(g_wifi_ip);
 }
 const char *ui_wifi_get_ssid(void)
 {
-    return "WIFI not connected";
-    // return WiFi.SSID().c_str();
+    return g_wifi_ssid;
 }
 const char *ui_wifi_get_pwd(void)
 {
-    return "WIFI not connected";
-    // return WiFi.psk().c_str();
+    return g_wifi_pwd;
 }
 
 //************************************[ screen 7 ]****************************************** battery
