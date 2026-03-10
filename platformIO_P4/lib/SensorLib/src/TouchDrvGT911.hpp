@@ -210,10 +210,9 @@ public:
             __homeButtonCb(__userData);
         }
 
-        clearBuffer();
-
         touchPoint = GT911_GET_POINT(val);
         if (touchPoint == 0) {
+            clearBuffer();
             return 0;
         }
 
@@ -221,6 +220,7 @@ public:
         uint8_t write_buffer[2] = {0x81, 0x4F};
         if (writeThenRead(write_buffer, SENSORLIB_COUNT(write_buffer),
                           buffer, 39) == DEV_WIRE_ERR) {
+            clearBuffer();
             return 0;
         }
 
@@ -251,6 +251,7 @@ public:
 #endif
 
         updateXY(touchPoint, x_array, y_array);
+        clearBuffer();
 
         return touchPoint;
     }
