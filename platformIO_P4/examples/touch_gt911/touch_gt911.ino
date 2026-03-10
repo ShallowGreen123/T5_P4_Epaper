@@ -60,6 +60,35 @@ int16_t x[5], y[5];
 
 ExtensionIOXL9555 io;
 
+static constexpr uint32_t EXTIO_PIN_BASE = 0x1000;
+static constexpr uint32_t EXTIO_PIN(uint32_t pin) { return EXTIO_PIN_BASE + pin; }
+
+static void gpioWrite(uint32_t pin, uint8_t value)
+{
+    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
+        io.digitalWrite((uint8_t)(pin - EXTIO_PIN_BASE), value);
+        return;
+    }
+    digitalWrite((int)pin, value);
+}
+
+static int gpioRead(uint32_t pin)
+{
+    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
+        return io.digitalRead((uint8_t)(pin - EXTIO_PIN_BASE));
+    }
+    return digitalRead((int)pin);
+}
+
+static void gpioMode(uint32_t pin, uint8_t mode)
+{
+    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
+        io.pinMode((uint8_t)(pin - EXTIO_PIN_BASE), mode);
+        return;
+    }
+    pinMode((int)pin, mode);
+}
+
 
 // Function to scan I2C bus
 void scanI2CBus() {
@@ -109,22 +138,22 @@ void setup()
     const uint8_t chip_address = XL9555_SLAVE_ADDRESS0;
     if (io.init(Wire, SENSOR_SDA, SENSOR_SCL, chip_address)) {
         const uint8_t expands[] = {
-            // BOARD_PCA_00_T_RST,
-            // BOARD_PCA_01_CC_SW0,
-            // BOARD_PCA_02_CC_SW1,
-            // BOARD_PCA_03_LR_RST,
-            // BOARD_PCA_04_NRF_CE,
-            // BOARD_PCA_05_SHUTDOWN,
-            // BOARD_PCA_06_HDMI_RST,
-            // BOARD_PCA_07_HDMI_EN,
+            BOARD_PCA_00_T_RST,
+            BOARD_PCA_01_CC_SW0,
+            BOARD_PCA_02_CC_SW1,
+            BOARD_PCA_03_LR_RST,
+            BOARD_PCA_04_NRF_CE,
+            BOARD_PCA_05_SHUTDOWN,
+            BOARD_PCA_06_HDMI_RST,
+            BOARD_PCA_07_HDMI_EN,
             BOARD_PCA_10_EP_OE,
-            // BOARD_PCA_11_EP_MODE,
-            // BOARD_PCA_12_1V8_EN,
-            // BOARD_PCA_13_TPS_PWRUP,
-            // BOARD_PCA_14_VCOM_CTRL,
-            // BOARD_PCA_15_TPS_WAKEUP,
-            // BOARD_PCA_16_TPS_PWR_GOOD,
-            // BOARD_PCA_17_TPS_INT
+            BOARD_PCA_11_EP_MODE,
+            BOARD_PCA_12_1V8_EN,
+            BOARD_PCA_13_TPS_PWRUP,
+            BOARD_PCA_14_VCOM_CTRL,
+            BOARD_PCA_15_TPS_WAKEUP,
+            BOARD_PCA_16_TPS_PWR_GOOD,
+            BOARD_PCA_17_TPS_INT
         };
         for (auto pin : expands) {
             io.pinMode(pin, OUTPUT);
@@ -137,16 +166,17 @@ void setup()
             delay(1000);
         }
     }
-    // io.digitalWrite(BOARD_PCA_00_T_RST, LOW);
-    // delay(10);
-    // io.digitalWrite(BOARD_PCA_00_T_RST, HIGH);
 
     io.pinMode(BOARD_PCA_14_VCOM_CTRL, INPUT);
     io.pinMode(BOARD_PCA_15_TPS_WAKEUP, INPUT);
 
-    // If the reset pin and interrupt pin can be controlled by GPIO, the device address can be set arbitrarily
-    // If the interrupt and reset pins are not connected, you can pass in the -1 parameter and the library will automatically determine the address.
-    touch.setPins(-1, SENSOR_IRQ);
+    // Speed up and stabilize GT911 init/read on ESP32.
+    Wire.setClock(400000);
+
+    // Let the driver control GT911 reset (via XL9555) + INT (via MCU GPIO),
+    // so the I2C address is deterministically latched (0x5D) at boot.
+    touch.setPins((int)EXTIO_PIN(BOARD_PCA_00_T_RST), SENSOR_IRQ);
+    touch.setGpioCallback(gpioMode, gpioWrite, gpioRead);
     if (!touch.begin(Wire, GT911_SLAVE_ADDRESS_L, SENSOR_SDA, SENSOR_SCL)) {
         while (1) {
             Serial.println("Failed to find GT911 - check your wiring!");

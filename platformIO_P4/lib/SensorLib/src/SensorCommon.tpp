@@ -80,7 +80,12 @@ public:
         }
         __wire->begin();
 #elif defined(ARDUINO_ARCH_ESP32)
-        __wire->begin(__sda, __scl);
+        // ESP32 (esp-idf i2c-ng): calling Wire.begin() multiple times on the same bus
+        // can intermittently leave the driver in an invalid state. If the bus is
+        // already initialized, skip re-begin and only reuse the existing bus.
+        if (__wire->getClock() == 0) {
+            __wire->begin(__sda, __scl);
+        }
 #else
         __wire->begin();
 #endif
