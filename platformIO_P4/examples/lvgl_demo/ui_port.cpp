@@ -166,24 +166,7 @@ void ui_epd_clean(void)
 
 void ui_set_rotation(lv_disp_rot_t rot)
 {
-    // // EPD_ROT_LANDSCAPE = 0,
-    // // EPD_ROT_PORTRAIT = 1,
-    // // EPD_ROT_INVERTED_LANDSCAPE = 2,
-    // // EPD_ROT_INVERTED_PORTRAIT = 3,
-    // switch (rot)
-    // {
-    //     case LV_DISP_ROT_NONE: epd_set_rotation(EPD_ROT_INVERTED_PORTRAIT);  break;
-    //     case LV_DISP_ROT_90:   epd_set_rotation(EPD_ROT_INVERTED_LANDSCAPE); break;
-    //     case LV_DISP_ROT_180:  epd_set_rotation(EPD_ROT_PORTRAIT);           break;
-    //     case LV_DISP_ROT_270:  epd_set_rotation(EPD_ROT_LANDSCAPE);          break;
-    //     default:
-    //         break;
-    // }
-    // // LV_DISP_ROT_NONE = 0,
-    // // LV_DISP_ROT_90,
-    // // LV_DISP_ROT_180,
-    // // LV_DISP_ROT_270
-    // lv_disp_set_rotation(lv_disp_get_default(), rot);
+    ui_adjust_set_rotation((uint16_t)rot * 90);
 }
 
 //************************************[ screen 1 ]****************************************** clock

@@ -1,5 +1,6 @@
 
 
+#include "core/lv_obj_pos.h"
 #include "lvgl.h"
 #include "scr_mrg.h"
 #include "ui.h"
@@ -387,7 +388,7 @@ static void create0(lv_obj_t *parent)
     int status_bar_height = 60;
 
     menu_taskbar = lv_obj_create(parent);
-    lv_obj_set_size(menu_taskbar, LV_HOR_RES, status_bar_height);
+    lv_obj_set_size(menu_taskbar, lv_pct(100), status_bar_height);
     lv_obj_set_style_pad_all(menu_taskbar, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(menu_taskbar, 1, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(menu_taskbar, LV_SCROLLBAR_MODE_OFF);
@@ -455,7 +456,7 @@ static void create0(lv_obj_t *parent)
     lv_obj_set_style_border_color(menu_screen1, lv_color_hex(EPD_COLOR_FG), LV_PART_MAIN);
     lv_obj_set_style_border_side(menu_screen1, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
     lv_obj_set_style_pad_all(menu_screen1, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen1, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align_to(menu_screen1, menu_taskbar, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     // lv_obj_add_flag(menu_screen1, LV_OBJ_FLAG_HIDDEN);
 
     menu_screen2 = lv_obj_create(parent);
@@ -466,7 +467,7 @@ static void create0(lv_obj_t *parent)
     lv_obj_set_style_border_color(menu_screen2, lv_color_hex(EPD_COLOR_FG), LV_PART_MAIN);
     lv_obj_set_style_border_side(menu_screen2, LV_BORDER_SIDE_TOP, LV_PART_MAIN);
     lv_obj_set_style_pad_all(menu_screen2, 0, LV_PART_MAIN);
-    lv_obj_align(menu_screen2, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align_to(menu_screen2, menu_taskbar, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     // lv_obj_add_flag(menu_screen2, LV_OBJ_FLAG_HIDDEN);
 
     int icon_buf_len = ARRAY_LEN(icon_buf);
@@ -1539,7 +1540,7 @@ static void scr4_1_btn_event_cb(lv_event_t * e)
 static void create4_1(lv_obj_t *parent) 
 {
     lv_obj_t *info = lv_label_create(parent);
-    lv_obj_set_width(info, LV_HOR_RES * 0.9);
+    lv_obj_set_width(info, lv_pct(100) * 0.9);
     lv_obj_set_style_text_color(info, lv_color_hex(EPD_COLOR_FG), LV_PART_MAIN);
     lv_obj_set_style_text_font(info, &Font_Mono_Bold_25, LV_PART_MAIN);
     lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
@@ -2190,36 +2191,58 @@ static void wifi_scan_btn_event_cb(lv_event_t *e)
 
 static void create6(lv_obj_t *parent) 
 {
-    ui_set_rotation(LV_DISP_ROT_270);
-
     scr6_root = parent;
-    wifi_st_lab = lv_label_create(parent);
-    lv_obj_set_width(wifi_st_lab, 520);
+
+    lv_disp_t *disp = lv_disp_get_default();
+    lv_coord_t hor = disp ? lv_disp_get_hor_res(disp) : LCD_HOR_SIZE;
+    lv_coord_t ver = disp ? lv_disp_get_ver_res(disp) : LCD_VER_SIZE;
+    lv_coord_t margin = hor / 20;
+    if (margin < 16) margin = 16;
+
+    lv_obj_t *cont = lv_obj_create(parent);
+    lv_obj_remove_style_all(cont);
+    lv_obj_set_size(cont, hor - margin * 2, ver - 140);
+    lv_obj_align(cont, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(cont, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(cont, 14, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(EPD_COLOR_BG), LV_PART_MAIN);
+    lv_obj_set_style_border_width(cont, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+
+    wifi_st_lab = lv_label_create(cont);
+    lv_obj_set_width(wifi_st_lab, LV_PCT(100));
     lv_obj_set_style_text_font(wifi_st_lab, &Font_Mono_Bold_25, LV_PART_MAIN);
     lv_label_set_text(wifi_st_lab, ui_wifi_get_state_text());
     lv_obj_set_style_text_align(wifi_st_lab, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_align(wifi_st_lab, LV_ALIGN_TOP_LEFT, 50, 80);
 
-    wifi_scan_summary_lab = lv_label_create(parent);
-    lv_obj_set_width(wifi_scan_summary_lab, 980);
+    wifi_scan_summary_lab = lv_label_create(cont);
+    lv_obj_set_width(wifi_scan_summary_lab, LV_PCT(100));
     lv_label_set_long_mode(wifi_scan_summary_lab, LV_LABEL_LONG_WRAP);
     lv_label_set_text(wifi_scan_summary_lab, ui_wifi_get_summary());
     lv_obj_set_style_text_font(wifi_scan_summary_lab, &Font_Mono_Bold_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(wifi_scan_summary_lab, lv_color_black(), LV_PART_MAIN);
-    lv_obj_align_to(wifi_scan_summary_lab, wifi_st_lab, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 18);
 
-    wifi_scan_list = lv_list_create(parent);
-    lv_obj_set_size(wifi_scan_list, 980, 400);
-    lv_obj_align_to(wifi_scan_list, wifi_scan_summary_lab, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 18);
+    wifi_scan_list = lv_list_create(cont);
+    lv_obj_set_width(wifi_scan_list, LV_PCT(100));
     lv_obj_set_style_bg_color(wifi_scan_list, lv_color_hex(EPD_COLOR_BG), LV_PART_MAIN);
     lv_obj_set_style_border_width(wifi_scan_list, 2, LV_PART_MAIN);
     lv_obj_set_style_radius(wifi_scan_list, 24, LV_PART_MAIN);
     lv_obj_set_style_pad_all(wifi_scan_list, 12, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(wifi_scan_list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_flex_grow(wifi_scan_list, 1);
 
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, 220, 62);
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_RIGHT, -80, -60);
+    lv_obj_t *btn_row = lv_obj_create(cont);
+    lv_obj_remove_style_all(btn_row);
+    lv_obj_set_width(btn_row, LV_PCT(100));
+    lv_obj_set_height(btn_row, 70);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *btn = lv_btn_create(btn_row);
+    lv_obj_set_height(btn, 62);
+    lv_obj_set_width(btn, LV_PCT(45));
     lv_obj_set_style_radius(btn, 10, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
     wifi_scan_btn_label = lv_label_create(btn);
@@ -2267,7 +2290,6 @@ static void exit6(void)
 }
 static void destroy6(void) 
 {
-    ui_set_rotation(LV_DISP_ROT_NONE);
 }
 
 static scr_lifecycle_t screen6 = {
@@ -2395,7 +2417,7 @@ static lv_obj_t * scr7_create_label(lv_obj_t *parent)
 
 static void create7(lv_obj_t *parent)
 {
-    ui_set_rotation(LV_DISP_ROT_270);
+    /* honor global rotation set in Adjust; do not override here */
 
     lv_obj_t *label;
 
@@ -2504,7 +2526,6 @@ static void destroy7(void) {
     if(batt_refr_timer){
         batt_refr_timer = NULL;
     }
-    ui_set_rotation(LV_DISP_ROT_NONE);
 }
 
 static scr_lifecycle_t screen7 = {
@@ -2774,6 +2795,149 @@ static scr_lifecycle_t screen9 = {
 #endif
 //************************************[ screen 11 ]****************************************** adjust
 #if 1
+static lv_obj_t *scr11_mode_dd = NULL;
+static lv_obj_t *scr11_rot_dd = NULL;
+static lv_obj_t *scr11_mirror_dd = NULL;
+static lv_obj_t *scr11_partial_dd = NULL;
+static lv_obj_t *scr11_full_dd = NULL;
+static lv_obj_t *scr11_dither_sw = NULL;
+static lv_obj_t *scr11_low_flash_sw = NULL;
+
+static lv_obj_t *scr11_create_row(lv_obj_t *parent, const char *name)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 80);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(row, 18, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(row, 18, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(row, 16, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(row, lv_color_hex(EPD_COLOR_BG), LV_PART_MAIN);
+
+    lv_obj_t *label = lv_label_create(row);
+    lv_label_set_text(label, name);
+    lv_obj_set_style_text_font(label, &Font_Mono_Bold_25, LV_PART_MAIN);
+
+    return row;
+}
+
+static lv_obj_t *scr11_create_dropdown(lv_obj_t *row, const char *opts)
+{
+    lv_obj_t *dd = lv_dropdown_create(row);
+    lv_obj_set_width(dd, lv_pct(52));
+    lv_dropdown_set_options(dd, opts);
+    return dd;
+}
+
+static lv_obj_t *scr11_create_switch(lv_obj_t *row)
+{
+    lv_obj_t *sw = lv_switch_create(row);
+    lv_obj_set_style_transform_zoom(sw, 150, LV_PART_MAIN);
+    return sw;
+}
+
+static void scr11_update_mode_dependency(void)
+{
+    bool is_4bpp = (ui_adjust_get_color_mode() == 1);
+
+    if (is_4bpp)
+    {
+        lv_obj_add_state(scr11_dither_sw, LV_STATE_DISABLED);
+        lv_obj_clear_state(scr11_low_flash_sw, LV_STATE_DISABLED);
+    }
+    else
+    {
+        lv_obj_clear_state(scr11_dither_sw, LV_STATE_DISABLED);
+        lv_obj_add_state(scr11_low_flash_sw, LV_STATE_DISABLED);
+    }
+}
+
+static void scr11_mode_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    int select = lv_dropdown_get_selected(scr11_mode_dd);
+    ui_adjust_set_color_mode(select == 0 ? 0 : 1);
+    scr11_update_mode_dependency();
+}
+
+static void scr11_rot_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    static const uint16_t rot_map[] = {0, 90, 180, 270};
+    int select = lv_dropdown_get_selected(scr11_rot_dd);
+    if (select < 0 || select > 3)
+    {
+        select = 0;
+    }
+    ui_adjust_set_rotation(rot_map[select]);
+    lv_obj_invalidate(lv_scr_act());
+}
+
+static void scr11_mirror_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    int select = lv_dropdown_get_selected(scr11_mirror_dd);
+    if (select < 0 || select > 3)
+    {
+        select = 0;
+    }
+    ui_adjust_set_mirror((uint8_t)select);
+}
+
+static void scr11_partial_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    int partial = lv_dropdown_get_selected(scr11_partial_dd) + 1;
+    int full = ui_adjust_get_full_passes();
+    ui_adjust_set_passes(partial, full);
+}
+
+static void scr11_full_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    int partial = ui_adjust_get_partial_passes();
+    int full = lv_dropdown_get_selected(scr11_full_dd) + 1;
+    ui_adjust_set_passes(partial, full);
+}
+
+static void scr11_dither_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    bool on = lv_obj_has_state(scr11_dither_sw, LV_STATE_CHECKED);
+    ui_adjust_set_enable_dither(on);
+}
+
+static void scr11_low_flash_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    {
+        return;
+    }
+    bool on = lv_obj_has_state(scr11_low_flash_sw, LV_STATE_CHECKED);
+    ui_adjust_set_low_flash(on);
+}
+
 static void scr11_btn_event_cb(lv_event_t * e)
 {
     if(e->code == LV_EVENT_CLICKED){
@@ -2784,6 +2948,89 @@ static void scr11_btn_event_cb(lv_event_t * e)
 
 static void create11(lv_obj_t *parent)
 {
+    lv_obj_t *cont = lv_obj_create(parent);
+    lv_obj_remove_style_all(cont);
+    lv_obj_set_size(cont, lv_pct(94), lv_pct(84));
+    lv_obj_align(cont, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(cont, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(cont, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(cont, 8, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *row_mode = scr11_create_row(cont, "Color Mode");
+    scr11_mode_dd = scr11_create_dropdown(row_mode, "1bpp\n4bpp");
+
+    lv_obj_t *row_rot = scr11_create_row(cont, "Rotation");
+    scr11_rot_dd = scr11_create_dropdown(row_rot, "0\n90\n180\n270");
+
+    lv_obj_t *row_mirror = scr11_create_row(cont, "Mirror");
+    scr11_mirror_dd = scr11_create_dropdown(row_mirror, "normal\nmirror X\nmirror Y\nmirror X+Y (180 deg)");
+
+    lv_obj_t *row_partial = scr11_create_row(cont, "Partial Passes");
+    scr11_partial_dd = scr11_create_dropdown(row_partial, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15");
+
+    lv_obj_t *row_full = scr11_create_row(cont, "Full Passes");
+    scr11_full_dd = scr11_create_dropdown(row_full, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15");
+
+    lv_obj_t *row_dither = scr11_create_row(cont, "Ordered Dither");
+    scr11_dither_sw = scr11_create_switch(row_dither);
+
+    lv_obj_t *row_low_flash = scr11_create_row(cont, "Low Flash");
+    scr11_low_flash_sw = scr11_create_switch(row_low_flash);
+
+    int mode_4bpp = ui_adjust_get_color_mode();
+    lv_dropdown_set_selected(scr11_mode_dd, mode_4bpp == 0 ? 0 : 1);
+
+    uint16_t rotation = ui_adjust_get_rotation();
+    int rotation_idx = 0;
+    if (rotation == 90) rotation_idx = 1;
+    else if (rotation == 180) rotation_idx = 2;
+    else if (rotation == 270) rotation_idx = 3;
+    lv_dropdown_set_selected(scr11_rot_dd, rotation_idx);
+
+    uint8_t mirror = ui_adjust_get_mirror();
+    if (mirror > 3) mirror = 0;
+    lv_dropdown_set_selected(scr11_mirror_dd, mirror);
+
+    int partial = ui_adjust_get_partial_passes();
+    if (partial < 1) partial = 1;
+    if (partial > 15) partial = 15;
+    lv_dropdown_set_selected(scr11_partial_dd, partial - 1);
+
+    int full = ui_adjust_get_full_passes();
+    if (full < 1) full = 1;
+    if (full > 15) full = 15;
+    lv_dropdown_set_selected(scr11_full_dd, full - 1);
+
+    if (ui_adjust_get_enable_dither())
+    {
+        lv_obj_add_state(scr11_dither_sw, LV_STATE_CHECKED);
+    }
+    else
+    {
+        lv_obj_clear_state(scr11_dither_sw, LV_STATE_CHECKED);
+    }
+
+    if (ui_adjust_get_low_flash())
+    {
+        lv_obj_add_state(scr11_low_flash_sw, LV_STATE_CHECKED);
+    }
+    else
+    {
+        lv_obj_clear_state(scr11_low_flash_sw, LV_STATE_CHECKED);
+    }
+
+    lv_obj_add_event_cb(scr11_mode_dd, scr11_mode_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_rot_dd, scr11_rot_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_mirror_dd, scr11_mirror_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_partial_dd, scr11_partial_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_full_dd, scr11_full_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_dither_sw, scr11_dither_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(scr11_low_flash_sw, scr11_low_flash_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    scr11_update_mode_dependency();
     scr_back_btn_create(parent, "Adjust", scr11_btn_event_cb);
 }
 

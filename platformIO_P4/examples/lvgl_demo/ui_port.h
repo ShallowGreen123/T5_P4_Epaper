@@ -16,6 +16,19 @@ void ui_full_refresh(void);
 void ui_full_clean(void);
 void ui_epd_clean(void);
 void ui_set_rotation(lv_disp_rot_t rot);
+void ui_adjust_set_rotation(uint16_t rotation);
+uint16_t ui_adjust_get_rotation(void);
+void ui_adjust_set_mirror(uint8_t mirror_mode);
+uint8_t ui_adjust_get_mirror(void);
+void ui_adjust_set_passes(int partial_passes, int full_passes);
+int ui_adjust_get_partial_passes(void);
+int ui_adjust_get_full_passes(void);
+void ui_adjust_set_enable_dither(bool enable);
+bool ui_adjust_get_enable_dither(void);
+void ui_adjust_set_low_flash(bool enable);
+bool ui_adjust_get_low_flash(void);
+void ui_adjust_set_color_mode(int mode_4bpp);
+int ui_adjust_get_color_mode(void);
 
 // clock
 void ui_clock_get_time(uint8_t *h, uint8_t *m, uint8_t *s);

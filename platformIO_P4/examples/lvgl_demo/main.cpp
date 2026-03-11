@@ -61,24 +61,14 @@
 
 LV_IMG_DECLARE(img_test)
 
-// 1 = 4bpp grayscale (2 pixels per byte)
-// 0 = 1bpp (1 bit per pixel)
-#define EPD_USE_4BPP_GRAY 1
-
-// 1 = enable ordered dithering (better gradients in 1bpp)
-// 0 = simple threshold
-#define EPD_ENABLE_DITHER 1
-
-// Mirror controls for LVGL flush
-// EPD_MIRROR_MODE: 0 = normal, 1 = mirror X, 2 = mirror Y, 3 = mirror X+Y (180 deg)
-#define EPD_MIRROR_MODE 0
-// EPD_ROTATION: 0, 90, 180, 270 (rotation applied when writing to panel buffer)
-#define EPD_ROTATION 0
-
-// 4bpp update strategy:
-// 0 = always flashing full refresh (legacy behavior)
-// 1 = first refresh uses CLEAR_SLOW, then CLEAR_NONE to reduce flashing
-#define EPD_4BPP_LOW_FLASH 1
+static bool g_epd_use_4bpp_gray = true;
+static bool g_epd_enable_dither = true;
+static uint8_t g_epd_mirror_mode = 0;
+static uint16_t g_epd_rotation_deg = 0;
+static bool g_epd_4bpp_low_flash = true;
+static int g_epd_1bpp_partial_passes = 7;
+static int g_epd_1bpp_full_passes = 5;
+static bool g_first_4bpp_refresh = true;
 
 // --- GT911 touch globals --------------------------------------------------
 TouchDrvGT911 touch;
@@ -123,6 +113,124 @@ FASTEPD epaper;
 uint8_t *decodebuffer = NULL;
 uint8_t *pFramebuffer;
 
+static uint16_t epd_norm_rotation(uint16_t rotation)
+{
+    rotation %= 360;
+    if (rotation % 90 != 0)
+    {
+        return 0;
+    }
+    return rotation;
+}
+
+void ui_adjust_set_rotation(uint16_t rotation)
+{
+    g_epd_rotation_deg = epd_norm_rotation(rotation);
+    lv_disp_t *disp = lv_disp_get_default();
+    if (disp && disp->driver)
+    {
+        lv_coord_t hor_res = ((g_epd_rotation_deg == 90) || (g_epd_rotation_deg == 270)) ? DISP_HEIGHT : DISP_WIDTH;
+        lv_coord_t ver_res = ((g_epd_rotation_deg == 90) || (g_epd_rotation_deg == 270)) ? DISP_WIDTH : DISP_HEIGHT;
+        if ((disp->driver->hor_res != hor_res) || (disp->driver->ver_res != ver_res))
+        {
+            disp->driver->hor_res = hor_res;
+            disp->driver->ver_res = ver_res;
+            disp->driver->rotated = LV_DISP_ROT_NONE;
+            lv_disp_drv_update(disp, disp->driver);
+        }
+    }
+}
+
+uint16_t ui_adjust_get_rotation(void)
+{
+    return g_epd_rotation_deg;
+}
+
+void ui_adjust_set_mirror(uint8_t mirror_mode)
+{
+    g_epd_mirror_mode = mirror_mode & 0x3;
+}
+
+uint8_t ui_adjust_get_mirror(void)
+{
+    return g_epd_mirror_mode;
+}
+
+void ui_adjust_set_passes(int partial_passes, int full_passes)
+{
+    if (partial_passes < 1) partial_passes = 1;
+    if (partial_passes > 15) partial_passes = 15;
+    if (full_passes < 1) full_passes = 1;
+    if (full_passes > 15) full_passes = 15;
+
+    g_epd_1bpp_partial_passes = partial_passes;
+    g_epd_1bpp_full_passes = full_passes;
+    if (!g_epd_use_4bpp_gray)
+    {
+        epaper.setPasses(g_epd_1bpp_partial_passes, g_epd_1bpp_full_passes);
+    }
+}
+
+int ui_adjust_get_partial_passes(void)
+{
+    return g_epd_1bpp_partial_passes;
+}
+
+int ui_adjust_get_full_passes(void)
+{
+    return g_epd_1bpp_full_passes;
+}
+
+void ui_adjust_set_enable_dither(bool enable)
+{
+    g_epd_enable_dither = enable;
+}
+
+bool ui_adjust_get_enable_dither(void)
+{
+    return g_epd_enable_dither;
+}
+
+void ui_adjust_set_low_flash(bool enable)
+{
+    g_epd_4bpp_low_flash = enable;
+    g_first_4bpp_refresh = true;
+}
+
+bool ui_adjust_get_low_flash(void)
+{
+    return g_epd_4bpp_low_flash;
+}
+
+void ui_adjust_set_color_mode(int mode_4bpp)
+{
+    const bool use_4bpp = (mode_4bpp != 0);
+    if (g_epd_use_4bpp_gray == use_4bpp)
+    {
+        return;
+    }
+
+    g_epd_use_4bpp_gray = use_4bpp;
+    if (g_epd_use_4bpp_gray)
+    {
+        epaper.setMode(BB_MODE_4BPP);
+        epaper.fillScreen(BBEP_WHITE);
+        g_first_4bpp_refresh = true;
+    }
+    else
+    {
+        epaper.clearWhite();
+        epaper.setMode(BB_MODE_1BPP);
+        epaper.setPasses(g_epd_1bpp_partial_passes, g_epd_1bpp_full_passes);
+    }
+    pFramebuffer = epaper.currentBuffer();
+}
+
+int ui_adjust_get_color_mode(void)
+{
+    return g_epd_use_4bpp_gray ? 1 : 0;
+}
+
 static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
     const int32_t x1 = area->x1;
@@ -133,31 +241,19 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
     const int32_t w = x2 - x1 + 1;
     const int32_t h = y2 - y1 + 1;
 
-#if EPD_USE_4BPP_GRAY
-    const int32_t pitch = DISP_WIDTH / 2; // 4bpp: 2 pixels per byte
-#else
-    const int32_t pitch = (DISP_WIDTH + 7) / 8; // 1bpp: 8 pixels per byte
+    const int32_t pitch = g_epd_use_4bpp_gray ? (DISP_WIDTH / 2) : ((DISP_WIDTH + 7) / 8);
     static const uint8_t bayer4[4][4] = {
         {0, 8, 2, 10},
         {12, 4, 14, 6},
         {3, 11, 1, 9},
         {15, 7, 13, 5},
     };
-#endif
 
     for (int32_t y = 0; y < h; y++)
     {
-        int32_t src_y = y;
-#if (EPD_MIRROR_MODE & 0x2)
-        src_y = (h - 1) - y;
-#endif
         for (int32_t x = 0; x < w; x++)
         {
-            int32_t src_x = x;
-#if (EPD_MIRROR_MODE & 0x1)
-            src_x = (w - 1) - x;
-#endif
-            lv_color_t c = color_p[src_y * w + src_x];
+            lv_color_t c = color_p[y * w + x];
 
             // RGB565 -> 8-bit gray
             uint8_t r = LV_COLOR_GET_R(c);
@@ -170,82 +266,147 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 
             int32_t logical_x = x1 + x;
             int32_t logical_y = y1 + y;
+            if (g_epd_mirror_mode & 0x1)
+            {
+                logical_x = (disp->hor_res - 1) - logical_x;
+            }
+            if (g_epd_mirror_mode & 0x2)
+            {
+                logical_y = (disp->ver_res - 1) - logical_y;
+            }
+
             int32_t dst_x = logical_x;
             int32_t dst_y = logical_y;
 
-#if (EPD_ROTATION == 90)
-            dst_x = (DISP_WIDTH - 1) - logical_y;
-            dst_y = logical_x;
-#elif (EPD_ROTATION == 180)
-            dst_x = (DISP_WIDTH - 1) - logical_x;
-            dst_y = (DISP_HEIGHT - 1) - logical_y;
-#elif (EPD_ROTATION == 270)
-            dst_x = logical_y;
-            dst_y = (DISP_HEIGHT - 1) - logical_x;
-#endif
-#if EPD_USE_4BPP_GRAY
-            uint8_t g4 = gray >> 4; // 0..15
-            int32_t idx = dst_y * pitch + (dst_x >> 1);
-
-            if ((dst_x & 1) == 0)
+            if (g_epd_rotation_deg == 90)
             {
-                // even x -> high nibble
-                pFramebuffer[idx] = (pFramebuffer[idx] & 0x0F) | (g4 << 4);
+                dst_x = (DISP_WIDTH - 1) - logical_y;
+                dst_y = logical_x;
+            }
+            else if (g_epd_rotation_deg == 180)
+            {
+                dst_x = (DISP_WIDTH - 1) - logical_x;
+                dst_y = (DISP_HEIGHT - 1) - logical_y;
+            }
+            else if (g_epd_rotation_deg == 270)
+            {
+                dst_x = logical_y;
+                dst_y = (DISP_HEIGHT - 1) - logical_x;
+            }
+
+            if ((dst_x < 0) || (dst_x >= DISP_WIDTH) || (dst_y < 0) || (dst_y >= DISP_HEIGHT))
+            {
+                continue;
+            }
+
+            if (g_epd_use_4bpp_gray)
+            {
+                uint8_t g4 = gray >> 4;
+                int32_t idx = dst_y * pitch + (dst_x >> 1);
+                if ((dst_x & 1) == 0)
+                {
+                    pFramebuffer[idx] = (pFramebuffer[idx] & 0x0F) | (g4 << 4);
+                }
+                else
+                {
+                    pFramebuffer[idx] = (pFramebuffer[idx] & 0xF0) | g4;
+                }
             }
             else
             {
-                // odd x -> low nibble
-                pFramebuffer[idx] = (pFramebuffer[idx] & 0xF0) | g4;
-            }
-#else
-            int32_t idx = dst_y * pitch + (dst_x >> 3);
-            uint8_t mask = 0x80 >> (dst_x & 7);
+                int32_t idx = dst_y * pitch + (dst_x >> 3);
+                uint8_t mask = 0x80 >> (dst_x & 7);
+                bool is_white = false;
+                if (g_epd_enable_dither)
+                {
+                    uint8_t threshold = (uint8_t)(bayer4[dst_y & 3][dst_x & 3] * 16);
+                    is_white = (gray >= threshold);
+                }
+                else
+                {
+                    is_white = (gray >= 128);
+                }
 
-#if EPD_ENABLE_DITHER
-            uint8_t threshold = (uint8_t)(bayer4[dst_y & 3][dst_x & 3] * 16);
-            bool is_white = (gray >= threshold);
-#else
-            bool is_white = (gray >= 128);
-#endif
-
-            if (is_white)
-            {
-                pFramebuffer[idx] |= mask; // white
+                if (is_white)
+                {
+                    pFramebuffer[idx] |= mask;
+                }
+                else
+                {
+                    pFramebuffer[idx] &= (uint8_t)~mask;
+                }
             }
-            else
-            {
-                pFramebuffer[idx] &= (uint8_t)~mask; // black
-            }
-#endif
         }
     }
 
-    // full or partial update
-#if EPD_USE_4BPP_GRAY
-    if (lv_disp_flush_is_last(disp))
+    if (g_epd_use_4bpp_gray)
     {
-#if EPD_4BPP_LOW_FLASH
-        static bool s_first_4bpp_refresh = true;
-        if (s_first_4bpp_refresh)
+        if (lv_disp_flush_is_last(disp))
         {
-            // Do one strong clear pass after boot, then use no-clear updates.
-            epaper.fullUpdate(CLEAR_SLOW, true);
-            s_first_4bpp_refresh = false;
+            if (g_epd_4bpp_low_flash)
+            {
+                if (g_first_4bpp_refresh)
+                {
+                    epaper.fullUpdate(CLEAR_SLOW, true);
+                    g_first_4bpp_refresh = false;
+                }
+                else
+                {
+                    epaper.fullUpdate(CLEAR_NONE, true);
+                }
+            }
+            else
+            {
+                epaper.fullUpdate(CLEAR_SLOW, true);
+            }
         }
-        else
-        {
-            epaper.fullUpdate(CLEAR_NONE, true);
-        }
-#else
-        epaper.fullUpdate(CLEAR_SLOW, true);
-#endif
     }
-#else
-    epaper.partialUpdate(true, y1, y2);
-    // epaper.fullUpdate(true, true);
-#endif
-    // epaper.einkPower(true);
-    // or partial update: epaper.partialUpdate(true, y1, y2);
+    else
+    {
+        int32_t corners_x[4] = {x1, x1, x2, x2};
+        int32_t corners_y[4] = {y1, y2, y1, y2};
+        int32_t min_py = DISP_HEIGHT - 1;
+        int32_t max_py = 0;
+
+        for (int i = 0; i < 4; i++)
+        {
+            int32_t lx = corners_x[i];
+            int32_t ly = corners_y[i];
+            if (g_epd_mirror_mode & 0x1)
+            {
+                lx = (disp->hor_res - 1) - lx;
+            }
+            if (g_epd_mirror_mode & 0x2)
+            {
+                ly = (disp->ver_res - 1) - ly;
+            }
+
+            int32_t px = lx;
+            int32_t py = ly;
+            if (g_epd_rotation_deg == 90)
+            {
+                px = (DISP_WIDTH - 1) - ly;
+                py = lx;
+            }
+            else if (g_epd_rotation_deg == 180)
+            {
+                px = (DISP_WIDTH - 1) - lx;
+                py = (DISP_HEIGHT - 1) - ly;
+            }
+            else if (g_epd_rotation_deg == 270)
+            {
+                px = ly;
+                py = (DISP_HEIGHT - 1) - lx;
+            }
+
+            if (py < min_py) min_py = py;
+            if (py > max_py) max_py = py;
+        }
+
+        if (min_py < 0) min_py = 0;
+        if (max_py >= DISP_HEIGHT) max_py = DISP_HEIGHT - 1;
+        epaper.partialUpdate(true, min_py, max_py);
+    }
 
     lv_disp_flush_ready(disp);
 }
@@ -264,43 +425,52 @@ static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
         uint16_t touch_x = gt_x[0];
         uint16_t touch_y = gt_y[0];
 
-// #if EPD_ROTATION == 0
-//         // Landscape inverted (1440x720)
-//         last_x = touch_y;
-//         last_y = DISP_HEIGHT - touch_x;
-// #elif EPD_ROTATION == 90
-//         // Portrait inverted (720x1440)
-//         last_x = DISP_HEIGHT - touch_x;
-//         last_y = DISP_WIDTH - touch_y;
-// #elif EPD_ROTATION == 180
-//         // Landscape (1440x720)
-//         last_x = DISP_WIDTH - touch_y;
-//         last_y = touch_x;
-// #elif EPD_ROTATION == 270
-//         // Portrait (720x1440)
-//         last_x = touch_x;
-//         last_y = touch_y;
-// #endif
+        int32_t phys_x = (DISP_WIDTH - 1) - (int32_t)touch_y;
+        int32_t phys_y = (int32_t)touch_x;
 
-#if EPD_ROTATION == 0
-        // Landscape (1440x720)
-        last_x = DISP_WIDTH - touch_y;
-        last_y = touch_x;
-#elif EPD_ROTATION == 90
-        // Portrait (720x1440)
-        last_x = touch_x;
-        last_y = touch_y;
-#elif EPD_ROTATION == 180
-        // Landscape inverted (1440x720)
-        last_x = touch_y;
-        last_y = DISP_HEIGHT - touch_x;
-#elif EPD_ROTATION == 270
-        // Portrait inverted (720x1440)
-        last_x = DISP_HEIGHT - touch_x;
-        last_y = DISP_WIDTH - touch_y;
-#endif
-        if (last_x < 0) last_x = 0;
-        if (last_y < 0) last_y = 0;
+        int32_t lx = phys_x;
+        int32_t ly = phys_y;
+        if (g_epd_rotation_deg == 90)
+        {
+            lx = phys_y;
+            ly = (DISP_WIDTH - 1) - phys_x;
+        }
+        else if (g_epd_rotation_deg == 180)
+        {
+            lx = (DISP_WIDTH - 1) - phys_x;
+            ly = (DISP_HEIGHT - 1) - phys_y;
+        }
+        else if (g_epd_rotation_deg == 270)
+        {
+            lx = (DISP_HEIGHT - 1) - phys_y;
+            ly = phys_x;
+        }
+
+        lv_disp_t *disp = lv_disp_get_default();
+        lv_coord_t hor_res = DISP_WIDTH;
+        lv_coord_t ver_res = DISP_HEIGHT;
+        if (disp)
+        {
+            hor_res = lv_disp_get_hor_res(disp);
+            ver_res = lv_disp_get_ver_res(disp);
+        }
+
+        if (g_epd_mirror_mode & 0x1)
+        {
+            lx = (hor_res - 1) - lx;
+        }
+        if (g_epd_mirror_mode & 0x2)
+        {
+            ly = (ver_res - 1) - ly;
+        }
+
+        if (lx < 0) lx = 0;
+        if (ly < 0) ly = 0;
+        if (lx >= hor_res) lx = hor_res - 1;
+        if (ly >= ver_res) ly = ver_res - 1;
+
+        last_x = (lv_coord_t)lx;
+        last_y = (lv_coord_t)ly;
 
         data->state = LV_INDEV_STATE_PR;
         Serial.printf("touch pressed: %d, %d (raw: %d, %d)\n", last_x, last_y, touch_x, touch_y);
@@ -326,13 +496,8 @@ void lv_port_disp_init(void)
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
-#if (EPD_ROTATION == 90) || (EPD_ROTATION == 270)
-    disp_drv.hor_res = DISP_HEIGHT;
-    disp_drv.ver_res = DISP_WIDTH;
-#else
     disp_drv.hor_res = DISP_WIDTH;
     disp_drv.ver_res = DISP_HEIGHT;
-#endif
     disp_drv.flush_cb = disp_flush;
     // disp_drv.render_start_cb = dips_render_start_cb;
     disp_drv.draw_buf = &draw_buf;
@@ -413,13 +578,16 @@ void idf_setup()
     pFramebuffer = epaper.currentBuffer();
     epaper.fillScreen(BBEP_WHITE);
     // epaper.fillScreen(15);
-#if EPD_USE_4BPP_GRAY
-    epaper.setMode(BB_MODE_4BPP);
-#else
-    epaper.clearWhite(); 
-    epaper.setMode(BB_MODE_1BPP);
-    epaper.setPasses(7, 5);
-#endif
+    if (g_epd_use_4bpp_gray)
+    {
+        epaper.setMode(BB_MODE_4BPP);
+    }
+    else
+    {
+        epaper.clearWhite();
+        epaper.setMode(BB_MODE_1BPP);
+        epaper.setPasses(g_epd_1bpp_partial_passes, g_epd_1bpp_full_passes);
+    }
 
     lv_port_disp_init();
 
