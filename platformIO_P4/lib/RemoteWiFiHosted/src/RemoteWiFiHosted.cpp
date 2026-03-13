@@ -52,12 +52,12 @@ wl_status_t RemoteWiFiClass::connect(const char *ssid, const char *pass, uint32_
     }
 
     if (disconnect_first) {
-        WiFi.disconnect(true, true);
-        delay(100);
+        disconnect(false, true);
     }
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pass == nullptr ? "" : pass);
+    _sta_begun = true;
 
     const uint32_t start_ms = millis();
     wl_status_t st = static_cast<wl_status_t>(WiFi.status());
@@ -70,7 +70,20 @@ wl_status_t RemoteWiFiClass::connect(const char *ssid, const char *pass, uint32_
 }
 
 bool RemoteWiFiClass::disconnect(bool wifioff, bool eraseap) {
-    return WiFi.disconnect(wifioff, eraseap);
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+        _sta_begun = false;
+        return true;
+    }
+
+    if (!_sta_begun) {
+        return true;
+    }
+
+    const bool ok = WiFi.disconnect(wifioff, eraseap);
+    if (wifioff) {
+        _sta_begun = false;
+    }
+    return ok;
 }
 
 bool RemoteWiFiClass::isConnected() const {

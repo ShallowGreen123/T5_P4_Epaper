@@ -53,6 +53,7 @@ public:
 
 private:
     bool _ready = false;
+    bool _sta_begun = false;
     bool configurePins();
     bool resetSlave() const;
     bool startHostedWiFi();
