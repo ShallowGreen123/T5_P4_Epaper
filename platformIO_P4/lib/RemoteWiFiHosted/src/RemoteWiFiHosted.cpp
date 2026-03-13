@@ -42,6 +42,49 @@ bool RemoteWiFiClass::isReady() const {
     return _ready;
 }
 
+wl_status_t RemoteWiFiClass::connect(const char *ssid, const char *pass, uint32_t timeout_ms, bool disconnect_first) {
+    if (ssid == nullptr || ssid[0] == '\0') {
+        return WL_NO_SSID_AVAIL;
+    }
+
+    if (!_ready && !begin()) {
+        return WL_CONNECT_FAILED;
+    }
+
+    if (disconnect_first) {
+        WiFi.disconnect(true, true);
+        delay(100);
+    }
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass == nullptr ? "" : pass);
+
+    const uint32_t start_ms = millis();
+    wl_status_t st = static_cast<wl_status_t>(WiFi.status());
+    while (st != WL_CONNECTED && (millis() - start_ms) < timeout_ms) {
+        delay(250);
+        st = static_cast<wl_status_t>(WiFi.status());
+    }
+
+    return st;
+}
+
+bool RemoteWiFiClass::disconnect(bool wifioff, bool eraseap) {
+    return WiFi.disconnect(wifioff, eraseap);
+}
+
+bool RemoteWiFiClass::isConnected() const {
+    return WiFi.isConnected();
+}
+
+wl_status_t RemoteWiFiClass::status() const {
+    return static_cast<wl_status_t>(WiFi.status());
+}
+
+IPAddress RemoteWiFiClass::localIP() const {
+    return WiFi.localIP();
+}
+
 bool RemoteWiFiClass::configurePins() {
 #if CONFIG_ESP_WIFI_REMOTE_ENABLED
     return WiFi.setPins(

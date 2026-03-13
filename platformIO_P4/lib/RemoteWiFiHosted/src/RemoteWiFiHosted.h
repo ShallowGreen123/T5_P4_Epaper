@@ -24,6 +24,15 @@ public:
     bool begin();
     bool isReady() const;
 
+    wl_status_t connect(const char *ssid,
+                        const char *pass,
+                        uint32_t timeout_ms = 20000,
+                        bool disconnect_first = true);
+    bool disconnect(bool wifioff = false, bool eraseap = false);
+    bool isConnected() const;
+    wl_status_t status() const;
+    IPAddress localIP() const;
+
     int16_t scanNetworks(bool async = false,
                          bool show_hidden = false,
                          bool passive = false,
