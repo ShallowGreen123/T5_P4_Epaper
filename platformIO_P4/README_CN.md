@@ -23,10 +23,16 @@
 ## :four: 引脚 🎁
 ~~~c
 // IIC Addr
+#define BOARD_I2C_ADDR_14           (0x14)
 #define BOARD_I2C_ADDR_ES8311       (0x18)
 #define BOARD_I2C_ADDR_PCA9535      (0x20) // PCA9535PW
 #define BOARD_I2C_ADDR_SGM38121     (0x28)
-#define BOARD_I2C_ADDR_TOUCH        (0x38) // FT5536
+#define BOARD_I2C_ADDR_48           (0x48) // LT8912
+#define BOARD_I2C_ADDR_49           (0x49)
+#define BOARD_I2C_ADDR_4A           (0x4A)
+#define BOARD_I2C_ADDR_4B           (0x4B)
+// #define BOARD_I2C_ADDR_TOUCH        (0x38) // FT5536
+#define BOARD_I2C_ADDR_TOUCH        (0x5D) // GT911
 #define BOARD_I2C_ADDR_BQ27220      (0x55) // BQ27220
 #define BOARD_I2C_ADDR_TPS651851    (0x68)
 #define BOARD_I2C_ADDR_BQ25896      (0x6B) // BQ25896
@@ -109,6 +115,13 @@
 #define BOARD_ES8311_I2S_LRCK   (40)
 #define BOARD_ES8311_I2S_DSDIN  (41)
 
+// MIPI to HDMI
+#define BOARD_HDMI_RST (BOARD_PCA_06_HDMI_RST)
+#define BOARD_HDMI_INT (4)
+#define BOARD_HDMI_SDA (BOARD_I2C_SDA)
+#define BOARD_HDMI_SCL (BOARD_I2C_SCL)
+#define BOARD_HDMI_DDC_SDA (9)
+#define BOARD_HDMI_DDC_SCL (10)
 ~~~
 
 

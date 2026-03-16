@@ -136,6 +136,13 @@ void ui_adjust_set_rotation(uint16_t rotation)
             disp->driver->hor_res = hor_res;
             disp->driver->ver_res = ver_res;
             disp->driver->rotated = LV_DISP_ROT_NONE;
+
+            Serial.println("ui_adjust_set_rotation: hor_res = " + String(disp->driver->hor_res));
+            Serial.println("ui_adjust_set_rotation: ver_res = " + String(disp->driver->ver_res));
+            Serial.println("LV_HOR_RES = " + String(LV_HOR_RES));
+            Serial.println("LV_VER_RES = " + String(LV_VER_RES));
+            Serial.println("ui_adjust_set_rotation: " + String(g_epd_rotation_deg));
+
             lv_disp_drv_update(disp, disp->driver);
         }
     }
