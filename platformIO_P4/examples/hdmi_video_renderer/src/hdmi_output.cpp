@@ -8,6 +8,7 @@
 
 #include "esp_err.h"
 #include "esp_ldo_regulator.h"
+#include "driver/i2c_master.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -15,35 +16,21 @@
 
 #if __has_include(<esp_lcd_mipi_dsi.h>)
 #include <esp_lcd_mipi_dsi.h>
+#include <esp_lcd_io_i2c.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_types.h>
 #else
 #error "Missing esp_lcd MIPI DSI headers"
 #endif
 
+#include "../../reference/managed_components/espressif__esp_lcd_lt8912b/include/esp_lcd_lt8912b.h"
+
 static ExtensionIOXL9555 g_io;
-static TwoWire g_ddcWire(1);
 
 static bool probeI2cAddr(TwoWire &wire, uint8_t addr)
 {
     wire.beginTransmission(addr);
     return wire.endTransmission() == 0;
-}
-
-static void dumpI2cScan(TwoWire &wire, uint8_t from, uint8_t to)
-{
-    Serial.printf("[hdmi] i2c scan 0x%02X..0x%02X: ", from, to);
-    bool any = false;
-    for (uint8_t addr = from; addr <= to; addr++) {
-        if (probeI2cAddr(wire, addr)) {
-            Serial.printf("0x%02X ", addr);
-            any = true;
-        }
-    }
-    if (!any) {
-        Serial.print("(none)");
-    }
-    Serial.println();
 }
 
 static uint8_t findIoExpanderAddr()
@@ -93,7 +80,7 @@ bool HdmiOutput::begin()
 
     Serial.println("[hdmi] initDsi");
     if (!initDsi()) {
-        Serial.println("[hdmi] DSI deskew error");
+        Serial.println("[hdmi] initDsi failed");
         return false;
     }
 
@@ -113,7 +100,19 @@ bool HdmiOutput::present(void *fb)
     }
     auto panel = static_cast<esp_lcd_panel_handle_t>(panel_);
     esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, 0, HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT, fb);
-    return err == ESP_OK;
+    if (err != ESP_OK) {
+        return false;
+    }
+
+    if (refresh_sem_) {
+        auto sem = static_cast<SemaphoreHandle_t>(refresh_sem_);
+        xSemaphoreTake(sem, 0);
+        if (xSemaphoreTake(sem, pdMS_TO_TICKS(50)) != pdTRUE) {
+            Serial.println("[hdmi] refresh wait timeout");
+            return false;
+        }
+    }
+    return true;
 }
 
 bool HdmiOutput::initIoExpander()
@@ -144,53 +143,68 @@ bool HdmiOutput::initIoExpander()
 
 bool HdmiOutput::initLt8912()
 {
+    if (i2c_bus_ && lt8912_io_main_ && lt8912_io_cec_ && lt8912_io_avi_) {
+        return true;
+    }
+
     pinMode(BOARD_HDMI_INT, INPUT);
+    Wire.end();
 
-    // Try a handful of commonly-used LT8912 I2C addresses (7-bit).
-    // Keep the preferred/default first to match docs/tests.
-    static const uint8_t candidates[] = {
-        HDMI_LT8912_I2C_ADDR, 0x48, 0x49, 0x4A, 0x4B, 0x24, 0x2D,
-    };
+    i2c_master_bus_config_t i2c_bus_conf = {};
+    i2c_bus_conf.i2c_port = 0;
+    i2c_bus_conf.sda_io_num = (gpio_num_t)BOARD_I2C_SDA;
+    i2c_bus_conf.scl_io_num = (gpio_num_t)BOARD_I2C_SCL;
+    i2c_bus_conf.clk_source = I2C_CLK_SRC_DEFAULT;
+    i2c_master_bus_handle_t bus = nullptr;
+    esp_err_t ret = i2c_new_master_bus(&i2c_bus_conf, &bus);
+    if (ret != ESP_OK) {
+        Serial.printf("[hdmi] i2c_new_master_bus failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
 
+    esp_lcd_panel_io_handle_t io_main = nullptr;
+    esp_lcd_panel_io_handle_t io_cec = nullptr;
+    esp_lcd_panel_io_handle_t io_avi = nullptr;
+
+    esp_lcd_panel_io_i2c_config_t io_cfg_main = {};
+    io_cfg_main.dev_addr = LT8912B_IO_I2C_MAIN_ADDRESS;
+    io_cfg_main.control_phase_bytes = 1;
+    io_cfg_main.dc_bit_offset = 0;
+    io_cfg_main.lcd_cmd_bits = 8;
+    io_cfg_main.lcd_param_bits = 8;
+    io_cfg_main.flags.disable_control_phase = 1;
+    io_cfg_main.scl_speed_hz = 100000;
+    ret = esp_lcd_new_panel_io_i2c(bus, &io_cfg_main, &io_main);
+    if (ret != ESP_OK) {
+        Serial.printf("[hdmi] LT8912 main IO init failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    esp_lcd_panel_io_i2c_config_t io_cfg_cec = io_cfg_main;
+    io_cfg_cec.dev_addr = LT8912B_IO_I2C_CEC_ADDRESS;
+    ret = esp_lcd_new_panel_io_i2c(bus, &io_cfg_cec, &io_cec);
+    if (ret != ESP_OK) {
+        Serial.printf("[hdmi] LT8912 CEC/DSI IO init failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    esp_lcd_panel_io_i2c_config_t io_cfg_avi = io_cfg_main;
+    io_cfg_avi.dev_addr = LT8912B_IO_I2C_AVI_ADDRESS;
+    ret = esp_lcd_new_panel_io_i2c(bus, &io_cfg_avi, &io_avi);
+    if (ret != ESP_OK) {
+        Serial.printf("[hdmi] LT8912 AVI IO init failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    i2c_bus_ = bus;
+    lt8912_io_main_ = io_main;
+    lt8912_io_cec_ = io_cec;
+    lt8912_io_avi_ = io_avi;
+    lt8912_addr_ = LT8912B_IO_I2C_MAIN_ADDRESS;
     lt8912_on_ddc_ = false;
-
-    for (int attempt = 0; attempt < 10; attempt++) {
-        for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-            const uint8_t addr = candidates[i];
-            if (probeI2cAddr(Wire, addr)) {
-                lt8912_addr_ = addr;
-                Serial.printf("[hdmi] LT8912 I2C ack at 0x%02X on SYS-I2C (attempt=%d)\n", addr, attempt + 1);
-                return true;
-            }
-        }
-        delay(20);
-    }
-
-    // Some LT8912 modules expose the control I2C on the HDMI DDC pins instead of the main system I2C.
-    // Probe the DDC bus as a fallback.
-    g_ddcWire.begin(BOARD_HDMI_DDC_SDA, BOARD_HDMI_DDC_SCL);
-    g_ddcWire.setClock(100000);
-    Serial.printf("[hdmi] probing LT8912 on DDC-I2C (sda=%d scl=%d clk=%u)\n", BOARD_HDMI_DDC_SDA, BOARD_HDMI_DDC_SCL, g_ddcWire.getClock());
-
-    for (int attempt = 0; attempt < 10; attempt++) {
-        for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-            const uint8_t addr = candidates[i];
-            if (probeI2cAddr(g_ddcWire, addr)) {
-                lt8912_addr_ = addr;
-                lt8912_on_ddc_ = true;
-                Serial.printf("[hdmi] LT8912 I2C ack at 0x%02X on DDC-I2C (attempt=%d)\n", addr, attempt + 1);
-                return true;
-            }
-        }
-        delay(20);
-    }
-
-    Serial.printf("[hdmi] LT8912 not found on SYS-I2C or DDC-I2C (preferred=0x%02X)\n", HDMI_LT8912_I2C_ADDR);
-    Serial.print("[hdmi] SYS-I2C ");
-    dumpI2cScan(Wire, 0x20, 0x77);
-    Serial.print("[hdmi] DDC-I2C ");
-    dumpI2cScan(g_ddcWire, 0x20, 0x77);
-    return false;
+    Serial.printf("[hdmi] LT8912 IO handles ready (main=0x%02X cec=0x%02X avi=0x%02X)\n", LT8912B_IO_I2C_MAIN_ADDRESS,
+                  LT8912B_IO_I2C_CEC_ADDRESS, LT8912B_IO_I2C_AVI_ADDRESS);
+    return true;
 }
 
 bool HdmiOutput::initDsiPhyPower()
@@ -263,7 +277,15 @@ static esp_err_t newDsiBusWithTimeout(const esp_lcd_dsi_bus_config_t *cfg, esp_l
 
 bool HdmiOutput::initDsi()
 {
-    esp_lcd_dsi_bus_handle_t bus = nullptr;
+    if (panel_) {
+        return true;
+    }
+    if (!lt8912_io_main_ || !lt8912_io_cec_ || !lt8912_io_avi_) {
+        Serial.println("[hdmi] LT8912 IO handles are not ready");
+        return false;
+    }
+
+    esp_lcd_dsi_bus_handle_t bus = static_cast<esp_lcd_dsi_bus_handle_t>(dsi_bus_);
     esp_lcd_dsi_bus_config_t bus_config = {};
     // ESP32-P4 (legacy DPHY PLLREF sources): using *_DEFAULT may map to XTAL on newer enums,
     // which will abort() in the current low-level driver. Use a known-supported source.
@@ -271,23 +293,26 @@ bool HdmiOutput::initDsi()
     bus_config.num_data_lanes = 2;
     bus_config.lane_bit_rate_mbps = HDMI_DSI_LANE_BIT_RATE_MBPS;
 
-    // Try multiple DSI bus IDs; some variants use bus 1 instead of bus 0.
     esp_err_t ret = ESP_FAIL;
-    for (int bus_id = 0; bus_id < 2; bus_id++) {
-        bus_config.bus_id = bus_id;
-        Serial.printf("[hdmi] trying DSI bus_id=%d\n", bus_id);
-        ret = newDsiBusWithTimeout(&bus_config, &bus, 2000);
-        if (ret == ESP_OK) {
-            Serial.printf("[hdmi] DSI bus_id=%d ok\n", bus_id);
-            break;
+    if (!bus) {
+        // Try multiple DSI bus IDs; some variants use bus 1 instead of bus 0.
+        for (int bus_id = 0; bus_id < 2; bus_id++) {
+            bus_config.bus_id = bus_id;
+            Serial.printf("[hdmi] trying DSI bus_id=%d\n", bus_id);
+            ret = newDsiBusWithTimeout(&bus_config, &bus, 2000);
+            if (ret == ESP_OK) {
+                Serial.printf("[hdmi] DSI bus_id=%d ok\n", bus_id);
+                dsi_bus_ = bus;
+                break;
+            }
+            if (ret == ESP_ERR_TIMEOUT) {
+                Serial.printf("[hdmi] esp_lcd_new_dsi_bus bus_id=%d timeout (PLL lock / lane stop)\n", bus_id);
+                continue;
+            }
+            Serial.printf("[hdmi] esp_lcd_new_dsi_bus bus_id=%d failed: %s\n", bus_id, esp_err_to_name(ret));
         }
-        if (ret == ESP_ERR_TIMEOUT) {
-            Serial.printf("[hdmi] esp_lcd_new_dsi_bus bus_id=%d timeout (PLL lock / lane stop)\n", bus_id);
-            continue;
-        }
-        Serial.printf("[hdmi] esp_lcd_new_dsi_bus bus_id=%d failed: %s\n", bus_id, esp_err_to_name(ret));
     }
-    if (ret != ESP_OK) {
+    if (!bus) {
         return false;
     }
 
@@ -295,33 +320,81 @@ bool HdmiOutput::initDsi()
     esp_lcd_dpi_panel_config_t dpi_config = {};
     dpi_config.virtual_channel = 0;
     dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-    dpi_config.dpi_clock_freq_mhz = HDMI_DPI_CLOCK_MHZ;
+    dpi_config.dpi_clock_freq_mhz = 64;
     dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
     dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
     dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
-    esp_lcd_video_timing_t timing = {};
-    timing.h_size = HDMI_FRAME_WIDTH;
-    timing.v_size = HDMI_FRAME_HEIGHT;
-    timing.hsync_pulse_width = 44;
-    timing.hsync_back_porch = 148;
-    timing.hsync_front_porch = 88;
-    timing.vsync_pulse_width = 5;
-    timing.vsync_back_porch = 36;
-    timing.vsync_front_porch = 4;
-    dpi_config.video_timing = timing;
     dpi_config.num_fbs = HDMI_FRAMEBUFFER_COUNT;
+    dpi_config.video_timing.h_size = HDMI_FRAME_WIDTH;
+    dpi_config.video_timing.v_size = HDMI_FRAME_HEIGHT;
+    dpi_config.video_timing.hsync_back_porch = 80;
+    dpi_config.video_timing.hsync_pulse_width = 32;
+    dpi_config.video_timing.hsync_front_porch = 48;
+    dpi_config.video_timing.vsync_back_porch = 13;
+    dpi_config.video_timing.vsync_pulse_width = 5;
+    dpi_config.video_timing.vsync_front_porch = 3;
+    dpi_config.flags.disable_lp = true;
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
     dpi_config.flags.use_dma2d = true;
+#endif
+    const esp_lcd_panel_lt8912b_video_timing_t video_timing = ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz();
+    lt8912b_vendor_config_t vendor_config = {
+        .video_timing = video_timing,
+        .mipi_config = {
+            .dsi_bus = bus,
+            .dpi_config = &dpi_config,
+            .lane_num = bus_config.num_data_lanes,
+        },
+    };
+    esp_lcd_panel_dev_config_t panel_config = {};
+    panel_config.reset_gpio_num = -1;
+    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
+    panel_config.bits_per_pixel = 24;
+    panel_config.vendor_config = &vendor_config;
+    const esp_lcd_panel_lt8912b_io_t io_all = {
+        .main = static_cast<esp_lcd_panel_io_handle_t>(lt8912_io_main_),
+        .cec_dsi = static_cast<esp_lcd_panel_io_handle_t>(lt8912_io_cec_),
+        .avi = static_cast<esp_lcd_panel_io_handle_t>(lt8912_io_avi_),
+    };
 
-    ret = esp_lcd_new_panel_dpi(bus, &dpi_config, &panel);
+    Serial.printf("[hdmi] LT8912B config: %ux%u RGB888 @ %lu MHz\n", HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT,
+                  (unsigned long)video_timing.pclk_mhz);
+
+    ret = esp_lcd_new_panel_lt8912b(&io_all, &panel_config, &panel);
     if (ret != ESP_OK) {
-        Serial.printf("[hdmi] esp_lcd_new_panel_dpi failed: %s\n", esp_err_to_name(ret));
+        Serial.printf("[hdmi] esp_lcd_new_panel_lt8912b failed: %s\n", esp_err_to_name(ret));
         return false;
     }
 
+    ret = esp_lcd_panel_reset(panel);
+    if (ret != ESP_OK) {
+        Serial.printf("[hdmi] esp_lcd_panel_reset failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
     ret = esp_lcd_panel_init(panel);
     if (ret != ESP_OK) {
         Serial.printf("[hdmi] esp_lcd_panel_init failed: %s\n", esp_err_to_name(ret));
         return false;
+    }
+    ret = esp_lcd_panel_disp_on_off(panel, true);
+    if (ret == ESP_ERR_NOT_SUPPORTED) {
+        Serial.println("[hdmi] esp_lcd_panel_disp_on_off not supported by LT8912B driver, continuing");
+    } else if (ret != ESP_OK) {
+        Serial.printf("[hdmi] esp_lcd_panel_disp_on_off failed: %s\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    bool hdmi_ready = false;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        hdmi_ready = esp_lcd_panel_lt8912b_is_ready(static_cast<esp_lcd_panel_t *>(panel));
+        Serial.printf("[hdmi] LT8912 ready check %d/10: %s\n", attempt + 1, hdmi_ready ? "ready" : "not ready");
+        if (hdmi_ready) {
+            break;
+        }
+        delay(100);
+    }
+    if (!hdmi_ready) {
+        Serial.println("[hdmi] LT8912 HPD not asserted yet, continuing anyway");
     }
 
     void *fb0 = nullptr;
@@ -338,15 +411,17 @@ bool HdmiOutput::initDsi()
     fbs_.fb[2] = fb2;
     fbs_.count = HDMI_FRAMEBUFFER_COUNT;
 
-    static SemaphoreHandle_t refresh_sem = xSemaphoreCreateBinary();
-    if (!refresh_sem) {
+    if (!refresh_sem_) {
+        refresh_sem_ = xSemaphoreCreateBinary();
+    }
+    if (!refresh_sem_) {
         Serial.println("[hdmi] create refresh semaphore failed");
         return false;
     }
 
     esp_lcd_dpi_panel_event_callbacks_t cbs = {};
     cbs.on_refresh_done = refreshDoneCallback;
-    ret = esp_lcd_dpi_panel_register_event_callbacks(panel, &cbs, refresh_sem);
+    ret = esp_lcd_dpi_panel_register_event_callbacks(panel, &cbs, refresh_sem_);
     if (ret != ESP_OK) {
         Serial.printf("[hdmi] esp_lcd_dpi_panel_register_event_callbacks failed: %s\n", esp_err_to_name(ret));
         return false;

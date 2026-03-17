@@ -42,8 +42,10 @@ static bool fskip(FILE *f, uint64_t n)
 bool Mp4MjpegReader::open(const char *path)
 {
     close();
+    diag_ = {};
     FILE *f = fopen(path, "rb");
     if (!f) {
+        diag_.status = Mp4ProbeStatus::OpenFileFailed;
         return false;
     }
     file_ = f;
@@ -51,6 +53,7 @@ bool Mp4MjpegReader::open(const char *path)
         close();
         return false;
     }
+    diag_.status = Mp4ProbeStatus::Ready;
     return rewindToFirstFrame();
 }
 
@@ -80,6 +83,11 @@ bool Mp4MjpegReader::info(Mp4MjpegInfo &out) const
     }
     out = info_;
     return true;
+}
+
+void Mp4MjpegReader::diagnostics(Mp4MjpegDiagnostics &out) const
+{
+    out = diag_;
 }
 
 bool Mp4MjpegReader::rewindToFirstFrame()
@@ -118,18 +126,26 @@ bool Mp4MjpegReader::parse()
 {
     auto f = static_cast<FILE *>(file_);
     if (!fseekAbs(f, 0)) {
+        diag_.status = Mp4ProbeStatus::ParseFailed;
         return false;
     }
     if (!parseBox(UINT64_MAX)) {
+        diag_.status = Mp4ProbeStatus::ParseFailed;
         return false;
     }
-    if (!selected_ || !videoCodecOk_) {
+    if (!selected_) {
+        diag_.status = Mp4ProbeStatus::NoVideoTrack;
         return false;
     }
     if (!buildSampleTable()) {
         return false;
     }
-    return !samples_.empty();
+    if (samples_.empty()) {
+        diag_.status = Mp4ProbeStatus::EmptySampleTable;
+        return false;
+    }
+    diag_.status = Mp4ProbeStatus::Ready;
+    return true;
 }
 
 bool Mp4MjpegReader::parseBox(uint64_t end)
@@ -222,6 +238,7 @@ bool Mp4MjpegReader::parseTrak(uint64_t end)
     }
 
     Mp4MjpegInfo oldInfo = info_;
+    Mp4MjpegDiagnostics oldDiag = diag_;
     auto oldStsz = stsz_;
     uint32_t oldStszFixed = stszFixed_;
     auto oldStco = stco_;
@@ -229,6 +246,7 @@ bool Mp4MjpegReader::parseTrak(uint64_t end)
     auto oldStts = stts_;
 
     info_ = {};
+    diag_ = {};
     stsz_.clear();
     stszFixed_ = 0;
     stco_.clear();
@@ -272,12 +290,13 @@ bool Mp4MjpegReader::parseTrak(uint64_t end)
         }
     }
 
-    if (inVideoTrak_ && videoCodecOk_) {
+    if (inVideoTrak_) {
         selected_ = true;
         return true;
     }
 
     info_ = oldInfo;
+    diag_ = oldDiag;
     stsz_ = std::move(oldStsz);
     stszFixed_ = oldStszFixed;
     stco_ = std::move(oldStco);
@@ -446,10 +465,12 @@ bool Mp4MjpegReader::parseStsd(uint64_t end)
     }
     const uint32_t entryCount = readBe32(hdr + 4);
     if (entryCount == 0) {
+        diag_.status = Mp4ProbeStatus::ParseFailed;
         return false;
     }
     const uint32_t sampleEntrySize = readBe32(hdr + 8);
     const uint32_t format = readBe32(hdr + 12);
+    diag_.codecTag = format;
     videoCodecOk_ = (format == tag4("mjpg")) || (format == tag4("jpeg"));
     (void)sampleEntrySize;
     return fseekAbs(f, end);
@@ -552,6 +573,7 @@ bool Mp4MjpegReader::parseTkhd(uint64_t end)
 {
     auto f = static_cast<FILE *>(file_);
     if (end < 8) {
+        diag_.status = Mp4ProbeStatus::ParseFailed;
         return false;
     }
     if (!fseekAbs(f, end - 8)) {
@@ -563,6 +585,8 @@ bool Mp4MjpegReader::parseTkhd(uint64_t end)
     }
     info_.width = readBe32(wh) >> 16;
     info_.height = readBe32(wh + 4) >> 16;
+    diag_.width = info_.width;
+    diag_.height = info_.height;
     return fseekAbs(f, end);
 }
 
@@ -593,18 +617,25 @@ bool Mp4MjpegReader::parseMdhd(uint64_t end)
         }
         info_.timeScale = readBe32(ts);
     }
+    diag_.timeScale = info_.timeScale;
     return fseekAbs(f, end);
 }
 
 bool Mp4MjpegReader::buildSampleTable()
 {
-    if (!selected_ || !videoCodecOk_) {
+    if (!selected_) {
+        diag_.status = Mp4ProbeStatus::NoVideoTrack;
         return false;
     }
     if (info_.timeScale == 0 || info_.width == 0 || info_.height == 0) {
+        diag_.width = info_.width;
+        diag_.height = info_.height;
+        diag_.timeScale = info_.timeScale;
+        diag_.status = Mp4ProbeStatus::MissingMetadata;
         return false;
     }
     if (stco_.empty() || stsc_.empty() || stsz_.empty() || stts_.empty()) {
+        diag_.status = Mp4ProbeStatus::IncompleteSampleTable;
         return false;
     }
 
@@ -627,6 +658,7 @@ bool Mp4MjpegReader::buildSampleTable()
                 break;
             }
             if (sttsIdx >= stts_.size()) {
+                diag_.status = Mp4ProbeStatus::IncompleteSampleTable;
                 return false;
             }
             const uint32_t size = stsz_[sampleIdx];
@@ -646,5 +678,14 @@ bool Mp4MjpegReader::buildSampleTable()
             break;
         }
     }
-    return samples_.size() == stsz_.size();
+    diag_.sampleCount = samples_.size();
+    if (samples_.size() != stsz_.size()) {
+        diag_.status = Mp4ProbeStatus::IncompleteSampleTable;
+        return false;
+    }
+    if (samples_.empty()) {
+        diag_.status = Mp4ProbeStatus::EmptySampleTable;
+        return false;
+    }
+    return true;
 }

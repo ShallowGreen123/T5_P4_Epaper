@@ -10,11 +10,33 @@ struct Mp4MjpegInfo {
     uint32_t timeScale;
 };
 
+enum class Mp4ProbeStatus {
+    Idle,
+    OpenFileFailed,
+    ParseFailed,
+    NoVideoTrack,
+    UnsupportedCodec,
+    MissingMetadata,
+    IncompleteSampleTable,
+    EmptySampleTable,
+    Ready,
+};
+
+struct Mp4MjpegDiagnostics {
+    Mp4ProbeStatus status{Mp4ProbeStatus::Idle};
+    uint32_t codecTag{};
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t timeScale{};
+    size_t sampleCount{};
+};
+
 class Mp4MjpegReader {
 public:
     bool open(const char *path);
     void close();
     bool info(Mp4MjpegInfo &out) const;
+    void diagnostics(Mp4MjpegDiagnostics &out) const;
     bool rewindToFirstFrame();
     bool readNextSample(uint8_t *dst, size_t dstCap, size_t &outSize, uint32_t &outDurationTs);
 
@@ -54,6 +76,7 @@ private:
 private:
     void *file_{};
     Mp4MjpegInfo info_{};
+    Mp4MjpegDiagnostics diag_{};
     bool selected_{};
     bool inVideoTrak_{};
     bool videoCodecOk_{};

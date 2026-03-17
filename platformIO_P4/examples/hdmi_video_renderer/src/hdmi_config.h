@@ -35,10 +35,11 @@
 #define BOARD_MIPI_DSI_PHY_PWR_LDO_CHAN (3)
 #define BOARD_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV (2500)
 
-// Use a mode that fits within the 2-lane DSI bandwidth on this board.
-#define HDMI_FRAME_WIDTH (1920)
-#define HDMI_FRAME_HEIGHT (1080)
-#define HDMI_DPI_CLOCK_MHZ (74.25f)   // 1080p30 timing
+// Use a lower-bandwidth 720p output mode while keeping RGB888 for LT8912B compatibility.
+#define HDMI_FRAME_WIDTH (1280)
+#define HDMI_FRAME_HEIGHT (720)
+#define HDMI_BYTES_PER_PIXEL (3)
+#define HDMI_DPI_CLOCK_MHZ (74.25f)   // 720p60 timing
 #define HDMI_DSI_LANE_BIT_RATE_MBPS (1000)
 #define HDMI_FRAMEBUFFER_COUNT (3)
 
