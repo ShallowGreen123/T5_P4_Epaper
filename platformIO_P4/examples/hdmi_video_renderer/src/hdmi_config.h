@@ -35,11 +35,17 @@
 #define BOARD_MIPI_DSI_PHY_PWR_LDO_CHAN (3)
 #define BOARD_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV (2500)
 
-// Use a lower-bandwidth 720p output mode while keeping RGB888 for LT8912B compatibility.
-#define HDMI_FRAME_WIDTH (1280)
-#define HDMI_FRAME_HEIGHT (720)
+// Reduced-bandwidth HDMI mode for stable MJPEG playback on LT8912B.
+#define HDMI_FRAME_WIDTH (800)
+#define HDMI_FRAME_HEIGHT (600)
 #define HDMI_BYTES_PER_PIXEL (3)
-#define HDMI_DPI_CLOCK_MHZ (74.25f)   // 720p60 timing
+#define HDMI_DPI_CLOCK_MHZ (40.0f)   // 800x600@60Hz timing
+#define HDMI_HSYNC_BACK_PORCH (88)
+#define HDMI_HSYNC_PULSE_WIDTH (128)
+#define HDMI_HSYNC_FRONT_PORCH (48)
+#define HDMI_VSYNC_BACK_PORCH (23)
+#define HDMI_VSYNC_PULSE_WIDTH (4)
+#define HDMI_VSYNC_FRONT_PORCH (1)
 #define HDMI_DSI_LANE_BIT_RATE_MBPS (1000)
 #define HDMI_FRAMEBUFFER_COUNT (3)
 

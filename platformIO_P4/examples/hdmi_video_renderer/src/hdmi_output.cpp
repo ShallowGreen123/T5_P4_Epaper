@@ -26,6 +26,8 @@
 #include "../../reference/managed_components/espressif__esp_lcd_lt8912b/include/esp_lcd_lt8912b.h"
 
 static ExtensionIOXL9555 g_io;
+static volatile uint32_t g_refresh_done_count = 0;
+static volatile uint32_t g_color_trans_done_count = 0;
 
 static bool probeI2cAddr(TwoWire &wire, uint8_t addr)
 {
@@ -98,6 +100,8 @@ bool HdmiOutput::present(void *fb)
     if (!panel_ || !fb) {
         return false;
     }
+    const uint32_t refresh_before = g_refresh_done_count;
+    const uint32_t color_before = g_color_trans_done_count;
     auto panel = static_cast<esp_lcd_panel_handle_t>(panel_);
     esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, 0, HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT, fb);
     if (err != ESP_OK) {
@@ -108,8 +112,11 @@ bool HdmiOutput::present(void *fb)
         auto sem = static_cast<SemaphoreHandle_t>(refresh_sem_);
         xSemaphoreTake(sem, 0);
         if (xSemaphoreTake(sem, pdMS_TO_TICKS(50)) != pdTRUE) {
-            Serial.println("[hdmi] refresh wait timeout");
-            return false;
+            const uint32_t refresh_after = g_refresh_done_count;
+            const uint32_t color_after = g_color_trans_done_count;
+            Serial.printf("[hdmi] refresh wait timeout (refresh +%lu color +%lu)\n",
+                          (unsigned long)(refresh_after - refresh_before),
+                          (unsigned long)(color_after - color_before));
         }
     }
     return true;
@@ -232,8 +239,15 @@ static bool refreshDoneCallback(esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_
 {
     auto sem = static_cast<SemaphoreHandle_t>(user_ctx);
     BaseType_t higher = pdFALSE;
+    g_refresh_done_count++;
     xSemaphoreGiveFromISR(sem, &higher);
     return higher == pdTRUE;
+}
+
+static bool colorTransDoneCallback(esp_lcd_panel_handle_t, esp_lcd_dpi_panel_event_data_t *, void *)
+{
+    g_color_trans_done_count++;
+    return false;
 }
 
 typedef struct {
@@ -320,24 +334,24 @@ bool HdmiOutput::initDsi()
     esp_lcd_dpi_panel_config_t dpi_config = {};
     dpi_config.virtual_channel = 0;
     dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-    dpi_config.dpi_clock_freq_mhz = 64;
+    dpi_config.dpi_clock_freq_mhz = HDMI_DPI_CLOCK_MHZ;
     dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB888;
     dpi_config.in_color_format = LCD_COLOR_FMT_RGB888;
     dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
     dpi_config.num_fbs = HDMI_FRAMEBUFFER_COUNT;
     dpi_config.video_timing.h_size = HDMI_FRAME_WIDTH;
     dpi_config.video_timing.v_size = HDMI_FRAME_HEIGHT;
-    dpi_config.video_timing.hsync_back_porch = 80;
-    dpi_config.video_timing.hsync_pulse_width = 32;
-    dpi_config.video_timing.hsync_front_porch = 48;
-    dpi_config.video_timing.vsync_back_porch = 13;
-    dpi_config.video_timing.vsync_pulse_width = 5;
-    dpi_config.video_timing.vsync_front_porch = 3;
+    dpi_config.video_timing.hsync_back_porch = HDMI_HSYNC_BACK_PORCH;
+    dpi_config.video_timing.hsync_pulse_width = HDMI_HSYNC_PULSE_WIDTH;
+    dpi_config.video_timing.hsync_front_porch = HDMI_HSYNC_FRONT_PORCH;
+    dpi_config.video_timing.vsync_back_porch = HDMI_VSYNC_BACK_PORCH;
+    dpi_config.video_timing.vsync_pulse_width = HDMI_VSYNC_PULSE_WIDTH;
+    dpi_config.video_timing.vsync_front_porch = HDMI_VSYNC_FRONT_PORCH;
     dpi_config.flags.disable_lp = true;
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
     dpi_config.flags.use_dma2d = true;
 #endif
-    const esp_lcd_panel_lt8912b_video_timing_t video_timing = ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz();
+    const esp_lcd_panel_lt8912b_video_timing_t video_timing = ESP_LCD_LT8912B_VIDEO_TIMING_800x600_60Hz();
     lt8912b_vendor_config_t vendor_config = {
         .video_timing = video_timing,
         .mipi_config = {
@@ -420,11 +434,21 @@ bool HdmiOutput::initDsi()
     }
 
     esp_lcd_dpi_panel_event_callbacks_t cbs = {};
+    cbs.on_color_trans_done = colorTransDoneCallback;
     cbs.on_refresh_done = refreshDoneCallback;
     ret = esp_lcd_dpi_panel_register_event_callbacks(panel, &cbs, refresh_sem_);
     if (ret != ESP_OK) {
         Serial.printf("[hdmi] esp_lcd_dpi_panel_register_event_callbacks failed: %s\n", esp_err_to_name(ret));
         return false;
+    }
+
+    Serial.println("[hdmi] showing DSI test pattern for 800 ms");
+    ret = esp_lcd_dpi_panel_set_pattern(panel, MIPI_DSI_PATTERN_BAR_VERTICAL);
+    if (ret == ESP_OK) {
+        delay(800);
+        esp_lcd_dpi_panel_set_pattern(panel, MIPI_DSI_PATTERN_NONE);
+    } else {
+        Serial.printf("[hdmi] esp_lcd_dpi_panel_set_pattern failed: %s\n", esp_err_to_name(ret));
     }
 
     panel_ = panel;

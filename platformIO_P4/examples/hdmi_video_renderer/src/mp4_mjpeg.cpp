@@ -8,6 +8,11 @@ static uint32_t readBe32(const uint8_t *p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+static uint16_t readBe16(const uint8_t *p)
+{
+    return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
+}
+
 static uint64_t readBe64(const uint8_t *p)
 {
     return ((uint64_t)readBe32(p) << 32) | (uint64_t)readBe32(p + 4);
@@ -67,6 +72,10 @@ void Mp4MjpegReader::close()
     selected_ = false;
     inVideoTrak_ = false;
     videoCodecOk_ = false;
+    sawVideoTrack_ = false;
+    sawUnsupportedVideoTrack_ = false;
+    unsupportedInfo_ = {};
+    unsupportedDiag_ = {};
     stsz_.clear();
     stszFixed_ = 0;
     stco_.clear();
@@ -134,7 +143,13 @@ bool Mp4MjpegReader::parse()
         return false;
     }
     if (!selected_) {
-        diag_.status = Mp4ProbeStatus::NoVideoTrack;
+        if (sawUnsupportedVideoTrack_) {
+            info_ = unsupportedInfo_;
+            diag_ = unsupportedDiag_;
+            diag_.status = Mp4ProbeStatus::UnsupportedCodec;
+        } else {
+            diag_.status = sawVideoTrack_ ? Mp4ProbeStatus::UnsupportedCodec : Mp4ProbeStatus::NoVideoTrack;
+        }
         return false;
     }
     if (!buildSampleTable()) {
@@ -290,9 +305,14 @@ bool Mp4MjpegReader::parseTrak(uint64_t end)
         }
     }
 
-    if (inVideoTrak_) {
+    if (inVideoTrak_ && videoCodecOk_) {
         selected_ = true;
         return true;
+    }
+    if (inVideoTrak_ && !videoCodecOk_) {
+        sawUnsupportedVideoTrack_ = true;
+        unsupportedInfo_ = info_;
+        unsupportedDiag_ = diag_;
     }
 
     info_ = oldInfo;
@@ -345,6 +365,7 @@ bool Mp4MjpegReader::parseMdia(uint64_t end)
             const uint32_t handler = readBe32(full + 8);
             if (handler == tag4("vide")) {
                 inVideoTrak_ = true;
+                sawVideoTrack_ = true;
             }
             if (!fseekAbs(f, boxEnd)) {
                 return false;
@@ -454,12 +475,12 @@ bool Mp4MjpegReader::parseStbl(uint64_t end)
 
 bool Mp4MjpegReader::parseStsd(uint64_t end)
 {
+    auto f = static_cast<FILE *>(file_);
     if (!inVideoTrak_) {
-        auto f = static_cast<FILE *>(file_);
         return fseekAbs(f, end);
     }
-    auto f = static_cast<FILE *>(file_);
-    uint8_t hdr[16];
+
+    uint8_t hdr[8];
     if (!freadExact(f, hdr, sizeof(hdr))) {
         return false;
     }
@@ -468,11 +489,71 @@ bool Mp4MjpegReader::parseStsd(uint64_t end)
         diag_.status = Mp4ProbeStatus::ParseFailed;
         return false;
     }
-    const uint32_t sampleEntrySize = readBe32(hdr + 8);
-    const uint32_t format = readBe32(hdr + 12);
-    diag_.codecTag = format;
-    videoCodecOk_ = (format == tag4("mjpg")) || (format == tag4("jpeg"));
-    (void)sampleEntrySize;
+
+    videoCodecOk_ = false;
+    diag_.codecTag = 0;
+    for (uint32_t entryIdx = 0; entryIdx < entryCount; ++entryIdx) {
+        if (ftellU64(f) + 8 > end) {
+            return false;
+        }
+
+        uint8_t entryHdr[8];
+        if (!freadExact(f, entryHdr, sizeof(entryHdr))) {
+            return false;
+        }
+
+        const uint32_t sampleEntrySize = readBe32(entryHdr);
+        const uint32_t format = readBe32(entryHdr + 4);
+        if (sampleEntrySize < 8) {
+            return false;
+        }
+        const uint64_t entryStart = ftellU64(f) - 8;
+        const uint64_t entryEnd = entryStart + sampleEntrySize;
+        if (entryEnd > end) {
+            return false;
+        }
+
+        if (diag_.codecTag == 0) {
+            diag_.codecTag = format;
+        }
+
+        uint16_t entryWidth = 0;
+        uint16_t entryHeight = 0;
+        if (sampleEntrySize >= 28) {
+            if (!fseekAbs(f, entryStart + 24)) {
+                return false;
+            }
+            uint8_t wh[4];
+            if (!freadExact(f, wh, sizeof(wh))) {
+                return false;
+            }
+            entryWidth = readBe16(wh);
+            entryHeight = readBe16(wh + 2);
+            if ((diag_.width == 0 || diag_.height == 0) && entryWidth && entryHeight) {
+                info_.width = entryWidth;
+                info_.height = entryHeight;
+                diag_.width = info_.width;
+                diag_.height = info_.height;
+            }
+        }
+
+        const bool codecSupported = (format == tag4("mjpg")) || (format == tag4("jpeg"));
+        if (codecSupported) {
+            videoCodecOk_ = true;
+            diag_.codecTag = format;
+            if (entryWidth && entryHeight) {
+                info_.width = entryWidth;
+                info_.height = entryHeight;
+                diag_.width = info_.width;
+                diag_.height = info_.height;
+            }
+        }
+
+        if (!fseekAbs(f, entryEnd)) {
+            return false;
+        }
+    }
+
     return fseekAbs(f, end);
 }
 

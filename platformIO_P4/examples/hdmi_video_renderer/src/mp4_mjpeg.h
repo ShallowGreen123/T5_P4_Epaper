@@ -80,6 +80,10 @@ private:
     bool selected_{};
     bool inVideoTrak_{};
     bool videoCodecOk_{};
+    bool sawVideoTrack_{};
+    bool sawUnsupportedVideoTrack_{};
+    Mp4MjpegInfo unsupportedInfo_{};
+    Mp4MjpegDiagnostics unsupportedDiag_{};
 
     std::vector<uint32_t> stsz_;
     uint32_t stszFixed_{};

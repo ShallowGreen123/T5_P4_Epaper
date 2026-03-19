@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <string>
 
 #include "esp_heap_caps.h"
@@ -17,6 +18,7 @@
 static constexpr uint32_t kWidth = HDMI_FRAME_WIDTH;
 static constexpr uint32_t kHeight = HDMI_FRAME_HEIGHT;
 static constexpr size_t kFrameBufferSize = (size_t)kWidth * (size_t)kHeight * HDMI_BYTES_PER_PIXEL;
+static constexpr uint32_t kDefaultFrameIntervalUs = 1000000UL / 15UL;
 static constexpr const char *kMountPoint = "/sdcard";
 static constexpr const char *kPixelFormatName = "RGB888";
 
@@ -85,6 +87,12 @@ static void logMp4Diagnostics(const Mp4MjpegReader &r)
     Serial.printf("[player] MP4 probe: status=%s codec=%s(0x%08lX) size=%lux%lu timeScale=%lu samples=%u\n",
                   mp4ProbeStatusName(diag.status), codec, (unsigned long)diag.codecTag, (unsigned long)diag.width,
                   (unsigned long)diag.height, (unsigned long)diag.timeScale, (unsigned)diag.sampleCount);
+    if (diag.status == Mp4ProbeStatus::UnsupportedCodec) {
+        Serial.println("[player] MP4 codec unsupported: only Motion JPEG in MP4 (mjpg/jpeg) is supported");
+    }
+    if (diag.status == Mp4ProbeStatus::Ready) {
+        Serial.println("[player] MP4 metadata source: atoms tkhd/stsd/mdhd parsed from /sdcard file");
+    }
 }
 
 static bool looksLikeJpeg(const uint8_t *data, size_t size)
@@ -136,6 +144,16 @@ static void logMp4Progress(size_t frameIdx, size_t totalFrames, uint64_t playedU
     }
 }
 
+static void logFileStat(const std::string &path)
+{
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) {
+        Serial.printf("[player] file stat: size=%llu bytes mtime=%lld\n", (unsigned long long)st.st_size, (long long)st.st_mtime);
+    } else {
+        Serial.printf("[player] file stat failed: errno=%d\n", errno);
+    }
+}
+
 static PlayResult playAvi(const std::string &path, const HdmiFramebuffers &fbs)
 {
     AviMjpegReader r;
@@ -178,7 +196,7 @@ static PlayResult playAvi(const std::string &path, const HdmiFramebuffers &fbs)
         }
         const uint64_t readEndUs = esp_timer_get_time();
 
-        void *fb = fbs.fb[frameIdx % (size_t)fbs.count];
+        void *fb = fbs.fb[(frameIdx + 1) % (size_t)fbs.count];
         if (!fb) {
             freeInputBuffer(input);
             dec.end();
@@ -203,7 +221,7 @@ static PlayResult playAvi(const std::string &path, const HdmiFramebuffers &fbs)
         }
         const uint64_t presentEndUs = esp_timer_get_time();
 
-        const uint32_t intervalUs = info.frameIntervalUs ? info.frameIntervalUs : 16666;
+        const uint32_t intervalUs = info.frameIntervalUs ? info.frameIntervalUs : kDefaultFrameIntervalUs;
         nextUs += intervalUs;
         const int64_t nowUs = esp_timer_get_time();
         const int64_t sleepUs = (int64_t)nextUs - nowUs;
@@ -285,7 +303,7 @@ static PlayResult playMp4(const std::string &path, const HdmiFramebuffers &fbs)
             return PlayResult::BadVideo;
         }
 
-        void *fb = fbs.fb[frameIdx % (size_t)fbs.count];
+        void *fb = fbs.fb[(frameIdx + 1) % (size_t)fbs.count];
         if (!fb) {
             freeInputBuffer(input);
             dec.end();
@@ -312,7 +330,8 @@ static PlayResult playMp4(const std::string &path, const HdmiFramebuffers &fbs)
         }
         const uint64_t presentEndUs = esp_timer_get_time();
 
-        const uint32_t intervalUs = durTs ? (uint32_t)((uint64_t)durTs * 1000000ULL / (uint64_t)info.timeScale) : 16666;
+        const uint32_t intervalUs =
+            durTs ? (uint32_t)((uint64_t)durTs * 1000000ULL / (uint64_t)info.timeScale) : kDefaultFrameIntervalUs;
         playedUs += intervalUs;
         nextUs += intervalUs;
         const int64_t nowUs = esp_timer_get_time();
@@ -359,6 +378,7 @@ static void playerTask(void *)
 
         Serial.print("[player] found video: ");
         Serial.println(path.c_str());
+        logFileStat(path);
 
         if (type == VideoContainerType::Mp4) {
             Serial.println("[player] playing MP4");
@@ -368,6 +388,9 @@ static void playerTask(void *)
                 g_sd.unmount();
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
+            }
+            if (res == PlayResult::InternalError) {
+                Serial.println("[player] ERROR: internal playback/display failure");
             }
             if (res != PlayResult::SdRemoved) {
                 g_sd.unmount();
@@ -382,6 +405,9 @@ static void playerTask(void *)
                 g_sd.unmount();
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
+            }
+            if (res == PlayResult::InternalError) {
+                Serial.println("[player] ERROR: internal playback/display failure");
             }
             if (res != PlayResult::SdRemoved) {
                 g_sd.unmount();

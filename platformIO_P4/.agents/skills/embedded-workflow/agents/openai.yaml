@@ -1,0 +1,4 @@
+interface:
+  display_name: ESP32 演示工作流
+  short_description: 标准化 ESP32 模块演示开发，从硬件资料整理到 PlatformIO + Arduino 示例代码输出。
+  default_prompt: 基于现有硬件资料，为我生成标准化的 ESP32 演示工程工作流，并按 examples 和 demo_core 输出样例代码。
