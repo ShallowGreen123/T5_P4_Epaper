@@ -1,6 +1,6 @@
 ---
 name: embedded-workflow
-description: 用于标准化基于 ESP32 系列芯片、PlatformIO 和 Arduino 框架的嵌入式演示工程开发流程。适用于用户希望把原理图、模块芯片数据手册、引脚映射、接口说明、现有项目目录或模块需求，转化为可重复执行的 demo 工作流、硬件分析结论、example 拆分方案、lib/demo_core 公共层、PlatformIO 配置、可编译的演示样例代码和交付清单。
+description: 用于标准化基于 ESP32 系列芯片、PlatformIO 和 Arduino 框架的嵌入式演示工程开发流程。适用于用户希望把原理图、模块芯片数据手册、引脚映射、接口说明、现有项目目录或模块需求，转化为可重复执行的 demo 工作流、硬件分析结论、example 拆分方案、PlatformIO 配置、可编译的演示样例代码和交付清单。
 ---
 
 使用这个 skill，把“硬件资料 + 模块需求”稳定地转成“可交付的演示工程”。
@@ -42,8 +42,11 @@ description: 用于标准化基于 ESP32 系列芯片、PlatformIO 和 Arduino �
    把模块能力拆成多个独立 example，确保每个 example 只承担一个主要目标。
 
 4. **样例代码生成**
-   生成 `examples/*`、`lib/demo_core/*`、`platformio.ini` 片段和必要说明。
-   代码模板见 [references/code-templates.md](references/code-templates.md)。
+   根据拆分设计和代码规范，生成可编译的 example 代码和 PlatformIO 配置片段。
+   代码必须能直接编译、烧录，并且串口日志能清晰反映执行步骤和结果。
+   优先使用 lib 中的公共函数和配置，避免在 example 中出现重复代码。
+   当 lib 中缺乏必要功能时，优先补齐公共层，而不是在 example 中临时代码。
+   生成 `examples/*`、`platformio.ini` 片段和必要说明。
 
 5. **交付物整理**
    输出硬件分析记录、example 清单、演示步骤、验证标准、固件归档和测试报告模板。
@@ -134,12 +137,16 @@ description: 用于标准化基于 ESP32 系列芯片、PlatformIO 和 Arduino �
 详细节奏见 [references/workflow-sop.md](references/workflow-sop.md)。
 
 ## 命名规则
-优先采用用户当前习惯的扁平式命名：
-- `examples/wifi_scan`
-- `examples/wifi_sta`
-- `examples/wifi_ap`
-- `examples/lcd_colorbar`
-- `examples/touch_read`
+优先采用带上测试层级和目标的命名规则，例如：
+examples/
+├─ wifi/
+│  ├─ smoke_scan/
+│  ├─ func_sta_connect/
+│  ├─ func_ap_start/
+│  ├─ robust_wrong_password/
+│  └─ stress_reconnect_1000/
+├─ i2c/
+└─ gpio/
 
 命名格式建议：
 - `<module>_<goal>`
@@ -192,7 +199,6 @@ description: 用于标准化基于 ESP32 系列芯片、PlatformIO 和 Arduino �
 ## 参考文件
 需要时按需加载，不要一次性全部展开：
 - [references/workflow-sop.md](references/workflow-sop.md)：标准 SOP 和阶段出口
-- [references/code-templates.md](references/code-templates.md)：公共层和 example 模板
 - [references/output-templates.md](references/output-templates.md)：分析、规划、报告模板
 - [references/review-checklist.md](references/review-checklist.md)：原理图和数据手册阅读清单
 

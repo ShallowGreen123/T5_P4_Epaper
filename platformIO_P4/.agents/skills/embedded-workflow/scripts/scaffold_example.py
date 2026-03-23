@@ -12,7 +12,7 @@ static const char *TAG = "{tag}";
 
 static bool run_demo()
 {{
-    DEMO_STEP("TODO: 补充演示步骤");
+    DEMO_STEP("TODO: implement demo steps");
     DEMO_CHECK_TRUE(true, "placeholder");
     return true;
 }}
