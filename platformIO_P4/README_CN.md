@@ -1,4 +1,16 @@
 
+主因大概率是 GPIO36 的启动脚冲突，不是软件初始化。
+
+屏幕的 STV 直接接到了 GPIO36，而 Espressif 对 ESP32-P4 的下载条件明确要求 `GPIO35=0`、`GPIO36=1`，并且这些 strap 会在 EN 拉高后的很短窗口里被采样。屏幕一插上，GPIO36 就不再是“空着的 strap 脚”，而是被面板/走线/负载占住了，所以复位时很容易不是稳定高电平，ROM 就不会进下载模式。
+
+如果你走的是原生 USB 下载，还要额外警惕 GPIO24/25 的冲突，因为这块板的 EPD CKH/STH 也占了这两个脚。也就是说，这块板的屏幕不只是“显示器”，它还把几个下载/启动相关脚直接占用了。参考：原理图复盘、原理图复盘、ESP32-P4 下载条件。
+
+最直接的验证是先拔屏再进下载模式；或者插屏时用示波器看 GPIO36 在 EN 拉高后的采样窗里是不是还保持高电平。要想边插屏边烧录，通常得给 STV 做隔离/缓冲，或者让面板侧在下载阶段高阻。
+
+[ESP32-P4 芯片启动条件](https://docs.espressif.com/projects/esp-techpedia/zh_CN/latest/esp-friends/get-started/try-firmware/try-firmware-hardware/esp32p4.html)
+
+[ESP硬件设计指南](https://docs.espressif.com/projects/esp-hardware-design-guidelines/zh_CN/latest/esp32p4/schematic-checklist-esp32p4.html)
+
 ---
 
 ## :four: 引脚 🎁

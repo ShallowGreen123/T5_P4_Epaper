@@ -16,3 +16,5 @@ hardware_test/p4_jpeg/
 hardware_test/xxxx/
 other/
 platformIO_P4/examples/reference/
+# examples/hdmi_video_renderer/
+PlatformIO_P4_examples/
