@@ -1,0 +1,134 @@
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0x1 (POWERON),boot:0xf (SPI_FAST_FLASH_BOOT)
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x1674
+load:0x4ff2abd0,len:0xe58
+load:0x4ff2cbd0,len:0x332c
+entry 0x4ff2abda
+W (24) pmu_param: hp_cali_dbias not burnt in efuse, use default.
+W (25) pmu_param: lp_cali_dbias not burnt in efuse, use default.
+I (36) boot: ESP-IDF v5.4.3 2nd stage bootloader
+I (36) boot: compile time Mar 31 2026 15:19:29
+I (36) boot: Multicore bootloader
+I (38) boot: chip revision: v1.0
+I (39) boot: efuse block revision: v0.1
+I (42) boot.esp32p4: SPI Speed      : 80MHz
+I (46) boot.esp32p4: SPI Mode       : DIO
+I (50) boot.esp32p4: SPI Flash Size : 16MB
+I (54) boot: Enabling RNG early entropy source...
+I (58) boot: Partition Table:
+I (61) boot: ## Label            Usage          Type ST Offset   Length
+I (67) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (74) boot:  1 phy_init         RF data          01 01 0000f000 00001000
+I (80) boot:  2 factory          factory app      00 00 00010000 00200000
+I (88) boot: End of partition table
+I (90) esp_image: segment 0: paddr=00010020 vaddr=48070020 size=24f24h (151332) map
+I (124) esp_image: segment 1: paddr=00034f4c vaddr=30100000 size=00068h (   104) load
+I (126) esp_image: segment 2: paddr=00034fbc vaddr=4ff00000 size=0b05ch ( 45148) load
+I (138) esp_image: segment 3: paddr=00040020 vaddr=48000020 size=6a260h (434784) map
+I (212) esp_image: segment 4: paddr=000aa288 vaddr=4ff0b05c size=0a070h ( 41072) load
+I (221) esp_image: segment 5: paddr=000b4300 vaddr=4ff15100 size=03364h ( 13156) load
+I (229) boot: Loaded app from partition at offset 0x10000
+I (230) boot: Disabling RNG early entropy source...
+W (239) pmu_pvt: blk_version is less than 2, pvt auto dbias init not supported in efuse.
+I (241) hex_psram: vendor id    : 0x0d (AP)
+I (241) hex_psram: Latency      : 0x01 (Fixed)
+I (244) hex_psram: DriveStr.    : 0x00 (25 Ohm)
+I (248) hex_psram: dev id       : 0x03 (generation 4)
+I (253) hex_psram: density      : 0x07 (256 Mbit)
+I (257) hex_psram: good-die     : 0x06 (Pass)
+I (261) hex_psram: SRF          : 0x02 (Slow Refresh)
+I (266) hex_psram: BurstType    : 0x00 ( Wrap)
+I (270) hex_psram: BurstLen     : 0x03 (2048 Byte)
+I (275) hex_psram: BitMode      : 0x01 (X16 Mode)
+I (279) hex_psram: Readlatency  : 0x04 (14 cycles@Fixed)
+I (284) hex_psram: DriveStrength: 0x00 (1/1)
+I (289) MSPI DQS: tuning success, best phase id is 0
+I (461) MSPI DQS: tuning success, best delayline id is 17
+I esp_psram: Found 32MB PSRAM device
+I esp_psram: Speed: 200MHz
+I (476) mmu_psram: .rodata xip on psram
+I (509) mmu_psram: .text xip on psram
+I (509) hex_psram: psram CS IO is dedicated
+I (510) cpu_start: Multicore app
+I (519) cpu_start: Pro cpu start user code
+I (519) cpu_start: cpu freq: 360000000 Hz
+I (520) app_init: Application information:
+I (520) app_init: Project name:     mipi_dsi_avoid_tearing
+I (525) app_init: App version:      85e11b8-dirty
+I (529) app_init: Compile time:     Mar 31 2026 15:49:04
+I (534) app_init: ELF file SHA256:  bf2a82906...
+I (538) app_init: ESP-IDF:          v5.4.3
+I (542) efuse_init: Min chip rev:     v0.1
+I (546) efuse_init: Max chip rev:     v1.99 
+I (550) efuse_init: Chip rev:         v1.0
+I (554) heap_init: Initializing. RAM available for dynamic allocation:
+I (560) heap_init: At 4FF19DA0 len 00021220 (132 KiB): RAM
+I (565) heap_init: At 4FF3AFC0 len 00004BF0 (18 KiB): RAM
+I (571) heap_init: At 4FF40000 len 00040000 (256 KiB): RAM
+I (576) heap_init: At 50108080 len 00007F80 (31 KiB): RTCRAM
+I (581) heap_init: At 30100068 len 00001F98 (7 KiB): TCM
+I (586) esp_psram: Adding pool of 32128K of PSRAM memory to heap allocator
+I (593) esp_psram: Adding pool of 23K of PSRAM memory gap generated due to end address alignment of irom to the heap allocator
+I (604) esp_psram: Adding pool of 44K of PSRAM memory gap generated due to end address alignment of drom to the heap allocator
+I (615) spi_flash: detected chip: generic
+I (619) spi_flash: flash io: dio
+I (622) main_task: Started on CPU0
+I (637) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (637) main_task: Calling app_main()
+I (637) main: Starting HDMI MP4 Player application
+I (642) main: Display timing: 800x600, DSI lane bitrate: 1000 Mbps
+I (648) t5_p4_board: MIPI DSI PHY powered on
+W (653) i2c.master: Please check pull-up resistances whether be connected properly. Otherwise unexpected behavior would happen. For more detailed information, please read docs
+I (667) t5_p4_board: I2C ready on SDA=7 SCL=8, port=1, clk=400000 Hz
+I (674) t5_p4_board: PCA9535 detected at 0x20
+I (867) t5_p4_board: LT8912B main detected at 0x48
+I (867) t5_p4_board: LT8912B CEC detected at 0x49
+I (867) t5_p4_board: LT8912B AVI detected at 0x4A
+I (869) gpio: GPIO[4]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 
+I (877) t5_p4_board: HDMI after-power-on: powered=yes out=0xC0/0x04 dir=0x3F/0xFB in=0xE0/0xC4 io10_1v8=1 io7_en=1 io6_rst=1 int_gpio=1
+I (936) lt8912b: Detected MIPI input. H sync: 0x00 0x00, V sync: 0x00 0x00
+I (961) lt8912b: LT8912 LVDS output disabled!
+I (961) lt8912b: LT8912 HDMI output enabled!
+I (962) lt8912b: Detected MIPI input. H sync: 0x00 0x00, V sync: 0x00 0x00
+I (965) t5_p4_board: LT8912B ready check 1/10: ready
+I (969) t5_p4_board: LT8912B HPD/ready after init: ready
+I (974) t5_p4_board: LT8912B diagnostics config: test_pattern=0 pn_swap=0 lane_swap=0
+I (982) t5_p4_board: HDMI after-panel-init: powered=yes out=0xC0/0x04 dir=0x3F/0xFB in=0xE0/0xC4 io10_1v8=1 io7_en=1 io6_rst=1 int_gpio=0
+I (1012) main: Allocated 2 external decode buffers (1440000 bytes each)
+I (1013) gpio: GPIO[47]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 
+I (1017) sdspi_transaction: cmd=52, R1 response: command not supported
+I (1064) sdspi_transaction: cmd=5, R1 response: command not supported
+I (1109) t5_p4_board: SD card mounted over SPI at /sdcard
+I (1109) main: Audio playback disabled, starting in video-only mode
+I (1109) main: Initializing stream adapter...
+I (1123) app_extractor: Extractors registered successfully
+I (1123) app_extractor: App extractor initialized
+I (1124) stream_adapter: Stream adapter initialized with event group control
+I (1130) main: Stream adapter initialized with RGB888/BGR at 800x600 (video-only)
+I (1141) stream_adapter: Set media file: /sdcard/test_video.mp4, extract_audio: 0
+I (1144) main: Starting loop playback of /sdcard/test_video.mp4
+I (1150) main: Starting playback loop #1
+I (1153) stream_adapter: Starting playback of /sdcard/test_video.mp4
+[0;32mI (1592) MP4_PARSER: Set video format:2[0m
+[0;32mI (1786) Data_Cache: Read finished 98/87381[0m
+[0;32mI (1913) Data_Cache: Read finished 0/87381[0m
+sample:0 pos:111 size:86991 pts:0
+sample:1 pos:87595 size:86944 pts:50
+sample:2 pos:174867 size:86989 pts:100
+sample:3 pos:262226 size:86985 pts:150
+sample:4 pos:349596 size:86996 pts:200
+sample:5 pos:436996 size:87003 pts:250
+sample:6 pos:524454 size:87014 pts:300
+sample:7 pos:611959 size:87022 pts:350
+sample:8 pos:699475 size:87013 pts:400
+sample:9 pos:787013 size:87016 pts:450
+I (2251) app_extractor: Found 1 audio and 1 video streams
+I (2256) app_extractor: Audio stream present but skipped in video-only mode
+I (2263) app_extractor: Video: format=2, 1280x720, 20fps
+I (2268) app_extractor: Video: MJPEG format - ESP32-P4 hardware accelerated
+I (2274) app_extractor: Extraction started: fps=50ms, audio=no
+I (2280) stream_adapter: Video info: 1280x720, 20 fps, 286700 ms
+I (2286) stream_adapter: Extract task started
+I (2290) stream_adapter: Extract task processing frames

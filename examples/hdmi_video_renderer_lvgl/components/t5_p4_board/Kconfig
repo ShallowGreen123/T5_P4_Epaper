@@ -1,0 +1,104 @@
+menu "Board Support Package (T5-P4 E-Paper)"
+
+    config BSP_ERROR_CHECK
+        bool "Enable error check in BSP"
+        default y
+
+    menu "I2C"
+        config BSP_I2C_NUM
+            int "I2C peripheral index"
+            default 0
+            range 0 1
+
+        config BSP_I2C_FAST_MODE
+            bool "Enable I2C fast mode"
+            default y
+
+        config BSP_I2C_CLK_SPEED_HZ
+            int
+            default 400000 if BSP_I2C_FAST_MODE
+            default 100000
+    endmenu
+
+    menu "I2S"
+        config BSP_I2S_NUM
+            int "I2S peripheral index"
+            default 0
+            range 0 2
+    endmenu
+
+    menu "uSD card - Virtual File System"
+        config BSP_SD_FORMAT_ON_MOUNT_FAIL
+            bool "Format uSD card if mounting fails"
+            default n
+
+        config BSP_SD_MOUNT_POINT
+            string "uSD card mount point"
+            default "/sdcard"
+    endmenu
+
+    menu "Display"
+        config BSP_LCD_DPI_BUFFER_NUMS
+            int "Set number of frame buffers"
+            default 1
+            range 1 3
+
+        config BSP_LCD_LT8912B_TEST_PATTERN
+            bool "Enable LT8912B built-in test pattern"
+            default n
+            help
+                Diagnostic option only.
+
+                When enabled, LT8912B outputs its internal test pattern instead
+                of relying on the incoming MIPI video stream. If the pattern is
+                visible on the monitor, the HDMI output side is working and the
+                issue is likely in the MIPI input or frame submission path.
+
+        config BSP_LCD_LT8912B_MIPI_PN_SWAP
+            bool "Enable LT8912B MIPI P/N swap"
+            default n
+            help
+                Diagnostic option for boards whose MIPI differential pair
+                polarity differs from the ESP32-P4-Function-EV-Board defaults.
+
+        config BSP_LCD_LT8912B_MIPI_LANE_SWAP
+            bool "Enable LT8912B MIPI lane swap"
+            default n
+            help
+                Diagnostic option for boards whose two MIPI data lanes are
+                routed in reversed order compared with the default LT8912B
+                configuration.
+
+        choice BSP_LCD_COLOR_FORMAT
+            prompt "Select LCD color format"
+            default BSP_LCD_COLOR_FORMAT_RGB888
+
+            config BSP_LCD_COLOR_FORMAT_RGB565
+                bool "RGB565"
+            config BSP_LCD_COLOR_FORMAT_RGB888
+                bool "RGB888"
+        endchoice
+
+        config BSP_LCD_TYPE_HDMI
+            bool "Use LT8912B HDMI output"
+            default y
+
+        choice BSP_LCD_HDMI_RESOLUTION
+            depends on BSP_LCD_TYPE_HDMI
+            prompt "Select HDMI resolution"
+            default BSP_LCD_HDMI_800x600_60HZ
+
+            config BSP_LCD_HDMI_800x600_60HZ
+                bool "800x600@60HZ"
+            config BSP_LCD_HDMI_1024x768_60HZ
+                bool "1024x768@60HZ"
+            config BSP_LCD_HDMI_1280x720_60HZ
+                bool "1280x720@60HZ"
+            config BSP_LCD_HDMI_1280x800_60HZ
+                bool "1280x800@60HZ"
+            config BSP_LCD_HDMI_1920x1080_30HZ
+                bool "1920x1080@30HZ"
+        endchoice
+    endmenu
+
+endmenu
