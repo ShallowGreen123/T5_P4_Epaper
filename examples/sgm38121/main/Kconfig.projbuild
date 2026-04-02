@@ -1,0 +1,65 @@
+menu "SGM38121 Test Configuration"
+
+config SGM38121_I2C_SDA
+    int "I2C SDA GPIO"
+    range 0 54
+    default 7
+
+config SGM38121_I2C_SCL
+    int "I2C SCL GPIO"
+    range 0 54
+    default 8
+
+config SGM38121_I2C_FREQ_HZ
+    int "I2C clock frequency (Hz)"
+    range 10000 400000
+    default 400000
+
+config SGM38121_APPLY_CONFIG_ON_BOOT
+    bool "Apply AVDD configuration on boot"
+    default y
+
+config SGM38121_ENABLE_AVDD1
+    bool "Enable AVDD1 / CAM_1V8"
+    default y
+
+config SGM38121_AVDD1_MV
+    int "AVDD1 target voltage (mV)"
+    depends on SGM38121_ENABLE_AVDD1
+    range 1504 3424
+    default 1800
+
+config SGM38121_ENABLE_AVDD2
+    bool "Enable AVDD2 / CAM_2V8"
+    default y
+
+config SGM38121_AVDD2_MV
+    int "AVDD2 target voltage (mV)"
+    depends on SGM38121_ENABLE_AVDD2
+    range 1504 3424
+    default 2800
+
+config SGM38121_DUMP_ALL_REGS_AT_BOOT
+    bool "Dump registers 0x00-0x0F at boot"
+    default y
+
+config SGM38121_DUMP_ALL_REGS_PERIODICALLY
+    bool "Dump registers 0x00-0x0F periodically"
+    default n
+
+config SGM38121_MONITOR_PERIOD_MS
+    int "Status monitor period (ms)"
+    range 250 60000
+    default 2000
+
+config SGM38121_TOGGLE_TEST
+    bool "Toggle enabled outputs on/off periodically"
+    default n
+
+config SGM38121_TOGGLE_PERIOD_MS
+    int "Toggle test period (ms)"
+    depends on SGM38121_TOGGLE_TEST
+    range 500 60000
+    default 3000
+
+endmenu
