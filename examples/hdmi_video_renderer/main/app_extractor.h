@@ -26,7 +26,7 @@ extern "C" {
 
 /* Audio Task Configuration  */
 #define AUDIO_TASK_PRIORITY             (7)
-#define AUDIO_TASK_STACK_SIZE           (4 * 1024)
+#define AUDIO_TASK_STACK_SIZE           (12 * 1024)
 #define AUDIO_QUEUE_SIZE                (6)
 #define AUDIO_QUEUE_TIMEOUT_MS          (50)
 

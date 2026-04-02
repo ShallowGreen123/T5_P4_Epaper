@@ -31,7 +31,7 @@
 static const char *TAG = "stream_adapter";
 
 /* Task parameters */
-#define EXTRACT_TASK_STACK_SIZE (4 * 1024)
+#define EXTRACT_TASK_STACK_SIZE (12 * 1024)
 #define EXTRACT_TASK_PRIORITY 5
 
 /* Event group bits for task control */
@@ -684,7 +684,9 @@ esp_err_t app_stream_adapter_init(const app_stream_adapter_config_t *config,
     adapter->buffer_count = config->buffer_count;
     adapter->buffer_size = config->buffer_size;
     adapter->running = false;
-    adapter->current_buffer = config->buffer_count - 1;
+    // Start from buffer 0 so the first decoded frame lands in buffer 1 when double-buffering.
+    // This avoids writing into the DPI buffer that the panel is already scanning on startup.
+    adapter->current_buffer = 0;
     adapter->frame_count = 0;
     adapter->has_info = false;
 
@@ -807,6 +809,7 @@ esp_err_t app_stream_adapter_set_file(app_stream_adapter_handle_t handle,
     adapter->height = 0;
     adapter->fps = 0;
     adapter->duration = 0;
+    adapter->current_buffer = 0;
     adapter->extract_audio = extract_audio && (adapter->audio_dev != NULL);
 
     ESP_LOGI(TAG, "Set media file: %s, extract_audio: %d",

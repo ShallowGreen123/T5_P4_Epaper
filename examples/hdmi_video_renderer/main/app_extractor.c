@@ -8,9 +8,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-#include <fcntl.h>      // Add support for open, O_RDONLY, etc.
-#include <unistd.h>     // Add support for read, close, etc.
-#include <sys/types.h>  // Add support for lseek, etc.
 #include <math.h>
 #include <errno.h>
 #include "esp_log.h"
@@ -35,7 +32,6 @@
 #include "mem_pool.h"
 
 // Include correct audio codec headers
-#include "simple_dec/esp_audio_simple_dec.h"
 #include "decoder/esp_audio_dec.h"
 #include "esp_audio_types.h"
 #include "esp_timer.h"
@@ -59,6 +55,7 @@
 #endif
 
 static const char *TAG = "app_extractor";
+#define APP_EXTRACTOR_HEAP_DIAG 0
 
 #define RETURN_ON_FAIL(ret) do { \
     if (ret != ESP_OK) { \
@@ -113,11 +110,16 @@ typedef struct app_extractor_t {
     int64_t                base_time;
 
     // Audio decoder
-    esp_audio_simple_dec_handle_t audio_decoder;
+    esp_audio_dec_handle_t audio_decoder;
     bool                   audio_decoder_open;
     uint8_t                *audio_buffer;
     uint32_t               audio_buffer_size;
+    uint8_t                *audio_input_buffer;
+    uint32_t               audio_input_buffer_size;
+    uint8_t                *audio_spec_info;
+    uint32_t               audio_spec_info_len;
     esp_codec_dev_handle_t audio_dev;
+    bool                    audio_device_opened;
 
     // Audio task and queue
     TaskHandle_t           audio_task_handle;
@@ -132,24 +134,125 @@ typedef struct app_extractor_t {
 /* Forward declarations */
 static esp_err_t process_audio_frame(app_extractor_t *extractor, uint8_t *buffer, uint32_t buffer_size, uint32_t pts);
 
+static bool check_heap_integrity(const char *where)
+{
+#if APP_EXTRACTOR_HEAP_DIAG
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "Heap corruption detected at %s", where);
+        return false;
+    }
+#else
+    (void)where;
+#endif
+    return true;
+}
+
+static void clear_audio_spec_info(app_extractor_t *extractor)
+{
+    if (extractor->audio_spec_info) {
+        free(extractor->audio_spec_info);
+        extractor->audio_spec_info = NULL;
+    }
+    extractor->audio_spec_info_len = 0;
+}
+
+static uint8_t aac_sample_rate_to_index(uint32_t sample_rate)
+{
+    static const uint32_t sample_rates[] = {
+        96000, 88200, 64000, 48000, 44100, 32000,
+        24000, 22050, 16000, 12000, 11025, 8000, 7350
+    };
+
+    for (uint8_t i = 0; i < sizeof(sample_rates) / sizeof(sample_rates[0]); i++) {
+        if (sample_rates[i] == sample_rate) {
+            return i;
+        }
+    }
+
+    return 4; // Fallback to 44100Hz
+}
+
+static bool get_aac_adts_params(app_extractor_t *extractor,
+                                uint8_t *profile, uint8_t *sample_rate_idx, uint8_t *channel_cfg)
+{
+    if (extractor->audio_spec_info && extractor->audio_spec_info_len >= 2) {
+        const uint8_t *cfg = extractor->audio_spec_info;
+        uint8_t audio_object_type = (cfg[0] >> 3) & 0x1F;
+        uint8_t freq_idx = (uint8_t)(((cfg[0] & 0x07) << 1) | (cfg[1] >> 7));
+        uint8_t channels = (cfg[1] >> 3) & 0x0F;
+
+        if (audio_object_type > 0 && audio_object_type < 5 && freq_idx != 0x0F && channels > 0) {
+            *profile = audio_object_type - 1;
+            *sample_rate_idx = freq_idx;
+            *channel_cfg = channels;
+            return true;
+        }
+    }
+
+    *profile = 1; // AAC LC
+    *sample_rate_idx = aac_sample_rate_to_index(extractor->audio_sample_rate);
+    *channel_cfg = extractor->audio_channels;
+    return true;
+}
+
+static esp_err_t prepare_aac_adts_frame(app_extractor_t *extractor,
+                                        const uint8_t *payload, uint32_t payload_size,
+                                        uint8_t **out_buffer, uint32_t *out_size)
+{
+    uint8_t profile = 1;
+    uint8_t sample_rate_idx = 4;
+    uint8_t channel_cfg = 2;
+
+    if (!get_aac_adts_params(extractor, &profile, &sample_rate_idx, &channel_cfg)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint32_t frame_size = payload_size + 7;
+    if (extractor->audio_input_buffer_size < frame_size) {
+        uint8_t *new_buffer = realloc(extractor->audio_input_buffer, frame_size);
+        if (new_buffer == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        extractor->audio_input_buffer = new_buffer;
+        extractor->audio_input_buffer_size = frame_size;
+    }
+
+    uint8_t *frame = extractor->audio_input_buffer;
+    frame[0] = 0xFF;
+    frame[1] = 0xF1;
+    frame[2] = (uint8_t)(((profile & 0x03) << 6) | ((sample_rate_idx & 0x0F) << 2) | ((channel_cfg >> 2) & 0x01));
+    frame[3] = (uint8_t)(((channel_cfg & 0x03) << 6) | ((frame_size >> 11) & 0x03));
+    frame[4] = (uint8_t)((frame_size >> 3) & 0xFF);
+    frame[5] = (uint8_t)(((frame_size & 0x07) << 5) | 0x1F);
+    frame[6] = 0xFC;
+    memcpy(frame + 7, payload, payload_size);
+
+    *out_buffer = frame;
+    *out_size = frame_size;
+    return ESP_OK;
+}
+
 /**
  * @brief File I/O wrapper functions for ESP Extractor
  */
 static void *_file_open(char *url, void *ctx)
 {
-    int fd = open(url, O_RDONLY);
-    if (fd < 0) {
-        ESP_LOGE(TAG, "Failed to open file: %s", url);
+    FILE *fp = fopen(url, "rb");
+    if (fp == NULL) {
+        ESP_LOGE(TAG, "Failed to open file: %s (errno=%d)", url, errno);
         return NULL;
     }
-    return (void*)(intptr_t)fd;
+    return fp;
 }
 
 static int _file_read(void *data, uint32_t size, void *ctx)
 {
-    int fd = (int)(intptr_t)ctx;
-    ssize_t bytes_read = read(fd, data, size);
-    if (bytes_read < 0) {
+    FILE *fp = (FILE *)ctx;
+    if (!check_heap_integrity("before fread")) {
+        return 0;
+    }
+    size_t bytes_read = fread(data, 1, size, fp);
+    if (bytes_read < size && ferror(fp)) {
         ESP_LOGE(TAG, "File read error: %d", errno);
         return 0;
     }
@@ -158,9 +261,8 @@ static int _file_read(void *data, uint32_t size, void *ctx)
 
 static int _file_seek(uint32_t position, void *ctx)
 {
-    int fd = (int)(intptr_t)ctx;
-    off_t result = lseek(fd, position, SEEK_SET);
-    if (result < 0) {
+    FILE *fp = (FILE *)ctx;
+    if (fseek(fp, (long)position, SEEK_SET) != 0) {
         ESP_LOGE(TAG, "File seek error: %d", errno);
         return -1;
     }
@@ -169,9 +271,8 @@ static int _file_seek(uint32_t position, void *ctx)
 
 static int _file_close(void *ctx)
 {
-    int fd = (int)(intptr_t)ctx;
-    int result = close(fd);
-    if (result < 0) {
+    FILE *fp = (FILE *)ctx;
+    if (fclose(fp) != 0) {
         ESP_LOGE(TAG, "File close error: %d", errno);
         return -1;
     }
@@ -180,10 +281,16 @@ static int _file_close(void *ctx)
 
 static uint32_t _file_size(void *ctx)
 {
-    int fd = (int)(intptr_t)ctx;
-    off_t current = lseek(fd, 0, SEEK_CUR);
-    off_t end = lseek(fd, 0, SEEK_END);
-    lseek(fd, current, SEEK_SET);
+    FILE *fp = (FILE *)ctx;
+    long current = ftell(fp);
+    if (current < 0) {
+        return 0;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        return 0;
+    }
+    long end = ftell(fp);
+    (void)fseek(fp, current, SEEK_SET);
     return end <= 0 ? 0 : (uint32_t)end;
 }
 
@@ -198,11 +305,20 @@ static void audio_task(void *arg)
     while (extractor->audio_task_running) {
         if (xQueueReceive(extractor->audio_queue, &frame_item,
                           pdMS_TO_TICKS(AUDIO_QUEUE_TIMEOUT_MS))) {
+            if (!check_heap_integrity("audio task before decode")) {
+                extractor->audio_task_running = false;
+                free(frame_item);
+                break;
+            }
 
             esp_err_t ret = process_audio_frame(extractor, frame_item->buffer,
                                                 frame_item->size, frame_item->pts);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to process audio frame: %d", ret);
+            }
+
+            if (!check_heap_integrity("audio task after decode")) {
+                extractor->audio_task_running = false;
             }
 
             free(frame_item);  // Free entire structure
@@ -395,7 +511,7 @@ static esp_err_t init_audio_decoder(app_extractor_t *extractor)
             .sample_rate = extractor->audio_sample_rate,
             .channel = extractor->audio_channels,
             .bits_per_sample = extractor->audio_bits,
-            .no_adts_header = false,  // Assuming ADTS header is present
+            .no_adts_header = false,  // We prepend an ADTS header for MP4 raw AAC frames
             .aac_plus_enable = true   // Enable AAC+ support for better quality
         };
 
@@ -405,16 +521,6 @@ static esp_err_t init_audio_decoder(app_extractor_t *extractor)
             .cfg = &aac_cfg,
             .cfg_sz = sizeof(aac_cfg)
         };
-
-        // Try unregistering all decoders first to ensure clean state
-        esp_audio_dec_unregister_all();
-
-        // Re-register required decoder
-        ret = esp_aac_dec_register();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to register AAC decoder: %d", ret);
-            return ret;
-        }
 
         // Open decoder with esp_audio_dec API
         ret = esp_audio_dec_open(&dec_cfg, &extractor->audio_decoder);
@@ -501,15 +607,14 @@ static esp_err_t process_audio_frame(app_extractor_t *extractor, uint8_t *buffer
 
     // PCM direct playback
     if (extractor->audio_format == EXTRACTOR_AUDIO_FORMAT_PCM) {
-        static bool first_frame = true;
-        if (first_frame) {
+        if (!extractor->audio_device_opened) {
             esp_codec_dev_sample_info_t fs = {
                 .sample_rate = extractor->audio_sample_rate,
                 .channel = extractor->audio_channels,
                 .bits_per_sample = extractor->audio_bits
             };
             esp_codec_dev_open(extractor->audio_dev, &fs);
-            first_frame = false;
+            extractor->audio_device_opened = true;
         }
 
         esp_err_t ret = esp_codec_dev_write(extractor->audio_dev, buffer, buffer_size);
@@ -544,7 +649,17 @@ static esp_err_t process_audio_frame(app_extractor_t *extractor, uint8_t *buffer
         }
     }
 
-    esp_audio_dec_in_raw_t raw = { .buffer = buffer, .len = buffer_size };
+    uint8_t *decode_input = buffer;
+    uint32_t decode_input_size = buffer_size;
+    if (extractor->audio_format == EXTRACTOR_AUDIO_FORMAT_AAC) {
+        esp_err_t wrap_ret = prepare_aac_adts_frame(extractor, buffer, buffer_size,
+                                                    &decode_input, &decode_input_size);
+        if (wrap_ret != ESP_OK) {
+            return wrap_ret;
+        }
+    }
+
+    esp_audio_dec_in_raw_t raw = { .buffer = decode_input, .len = decode_input_size };
     uint32_t total_decoded = 0;
 
     // Decode and play audio data
@@ -555,6 +670,9 @@ static esp_err_t process_audio_frame(app_extractor_t *extractor, uint8_t *buffer
         };
 
         esp_err_t ret = esp_audio_dec_process(extractor->audio_decoder, &raw, &out_frame);
+        if (!check_heap_integrity("after esp_audio_dec_process")) {
+            return ESP_FAIL;
+        }
 
         // Handle buffer resize if needed
         if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
@@ -581,18 +699,20 @@ static esp_err_t process_audio_frame(app_extractor_t *extractor, uint8_t *buffer
 
         if (out_frame.decoded_size > 0) {
             // Configure audio device on first decoded frame
-            static bool first_decoded = true;
-            if (first_decoded) {
+            if (!extractor->audio_device_opened) {
                 esp_codec_dev_sample_info_t fs = {
                     .sample_rate = extractor->audio_sample_rate,
                     .channel = extractor->audio_channels,
                     .bits_per_sample = extractor->audio_bits
                 };
                 esp_codec_dev_open(extractor->audio_dev, &fs);
-                first_decoded = false;
+                extractor->audio_device_opened = true;
             }
 
             esp_err_t write_ret = esp_codec_dev_write(extractor->audio_dev, out_frame.buffer, out_frame.decoded_size);
+            if (!check_heap_integrity("after esp_codec_dev_write")) {
+                return ESP_FAIL;
+            }
             total_decoded += out_frame.decoded_size;
 
             // Optimized timing control for decoded audio
@@ -753,8 +873,8 @@ static esp_err_t get_stream_info(app_extractor_t *extractor)
 
     ESP_LOGI(TAG, "Found %d audio and %d video streams", audio_num, video_num);
 
-    // Get audio stream info if available
-    if (audio_num > 0) {
+    // Get audio stream info only when audio extraction is enabled
+    if (audio_num > 0 && extractor->extract_audio) {
         ret = esp_extractor_get_stream_info(extractor->extractor,
                                             EXTRACTOR_STREAM_TYPE_AUDIO, 0, &stream_info);
         if (ret != ESP_OK) {
@@ -767,17 +887,30 @@ static esp_err_t get_stream_info(app_extractor_t *extractor)
             if (audio_info->format == EXTRACTOR_AUDIO_FORMAT_NONE) {
                 extractor->audio_format = EXTRACTOR_AUDIO_FORMAT_PCM;
             } else {
-                extractor->audio_format = audio_info->format;
+            extractor->audio_format = audio_info->format;
             }
             extractor->audio_sample_rate = audio_info->sample_rate;
             extractor->audio_channels = audio_info->channel;
             extractor->audio_bits = audio_info->bits_per_sample;
             extractor->audio_duration = stream_info.duration;
+            clear_audio_spec_info(extractor);
+            if (stream_info.spec_info && stream_info.spec_info_len > 0) {
+                extractor->audio_spec_info = malloc(stream_info.spec_info_len);
+                if (extractor->audio_spec_info == NULL) {
+                    return ESP_ERR_NO_MEM;
+                }
+                memcpy(extractor->audio_spec_info, stream_info.spec_info, stream_info.spec_info_len);
+                extractor->audio_spec_info_len = stream_info.spec_info_len;
+            }
 
             ESP_LOGI(TAG, "Audio: format=%d, %" PRIu32 "Hz, %dch, %dbits",
                      (int)extractor->audio_format, audio_info->sample_rate,
                      audio_info->channel, audio_info->bits_per_sample);
         }
+    } else if (audio_num > 0) {
+        extractor->has_audio = false;
+        clear_audio_spec_info(extractor);
+        ESP_LOGI(TAG, "Audio stream present but skipped in video-only mode");
     } else {
         extractor->has_audio = false;
     }
@@ -846,6 +979,11 @@ esp_err_t app_extractor_init(app_extractor_frame_cb_t frame_cb,
     extractor->audio_decoder_open = false;
     extractor->audio_buffer = NULL;
     extractor->audio_buffer_size = 0;
+    extractor->audio_input_buffer = NULL;
+    extractor->audio_input_buffer_size = 0;
+    extractor->audio_spec_info = NULL;
+    extractor->audio_spec_info_len = 0;
+    extractor->audio_device_opened = false;
 
     // Initialize audio task variables
     extractor->audio_task_handle = NULL;
@@ -936,6 +1074,7 @@ esp_err_t app_extractor_start(app_extractor_handle_t handle,
     extractor->last_video_pts = 0;
     extractor->last_audio_pts = 0;
     extractor->last_frame_time = esp_timer_get_time() / 1000;
+    extractor->audio_device_opened = false;
 
     // Set extraction mask based on what we want to extract
     uint8_t extract_mask = 0;
@@ -1138,6 +1277,7 @@ esp_err_t app_extractor_stop(app_extractor_handle_t handle)
     }
 
     extractor->eos_reached = true;
+    extractor->audio_device_opened = false;
 
     return ESP_OK;
 }
@@ -1164,6 +1304,13 @@ esp_err_t app_extractor_deinit(app_extractor_handle_t handle)
         free(extractor->audio_buffer);
         extractor->audio_buffer = NULL;
     }
+
+    if (extractor->audio_input_buffer != NULL) {
+        free(extractor->audio_input_buffer);
+        extractor->audio_input_buffer = NULL;
+    }
+
+    clear_audio_spec_info(extractor);
 
     // Delete audio queue
     if (extractor->audio_queue != NULL) {

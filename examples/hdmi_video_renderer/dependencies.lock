@@ -32,12 +32,12 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.4.1
+    version: 5.4.3
 direct_dependencies:
 - espressif/esp_audio_codec
 - espressif/esp_codec_dev
 - espressif/esp_lcd_lt8912b
 - idf
-manifest_hash: 57473cf37d40831a31a6880ab3e5a51045dbc68323401aa4bf3891b5859c35ac
+manifest_hash: cea497b6e1ee3ae40a65a4658301e2c3f35979f0afd4d9e2a31bf7280ddc4782
 target: esp32p4
 version: 2.0.0
