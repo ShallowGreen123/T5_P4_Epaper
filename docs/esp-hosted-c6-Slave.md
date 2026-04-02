@@ -2,6 +2,8 @@
 
 参考 [esp32_p4_function_ev_board.md](https://github.com/espressif/esp-hosted-mcu/blob/ee11e08cd4f0b8f5f5c4c4138fa890697562d3cf/docs/esp32_p4_function_ev_board.md) 如何使用 esp-hosted；
 
+参考 https://github.com/espressif/esp-hosted-mcu/tree/main/slave
+
 与 iperf 例程一起使用，测试网络通信速度；
 
 ESP32-C6-MINI 需要下载 esp-hosted-mcu 项目中的 slave 固件 (也就是当前目录下的 esp-hosted-c6-slave)，才可以通过 SDIO 与 P4 通信；
