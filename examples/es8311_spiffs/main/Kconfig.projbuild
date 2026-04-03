@@ -1,0 +1,17 @@
+menu "Example Configuration"
+
+    config EXAMPLE_VOICE_VOLUME
+        int "Speaker volume"
+        range 0 100
+        default 60
+        help
+            ES8311 output volume in percent.
+
+    config EXAMPLE_PLAYBACK_TIMEOUT_SECONDS
+        int "Playback timeout"
+        range 5 600
+        default 60
+        help
+            Maximum time to wait for a playback session to finish.
+
+endmenu
