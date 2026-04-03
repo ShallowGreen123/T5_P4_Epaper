@@ -2,11 +2,14 @@
 #include "sdkconfig.h"
 
 /* Example configurations */
-#define EXAMPLE_RECV_BUF_SIZE   (2400)
+#define EXAMPLE_RECV_BUF_SIZE   (2048)
 #define EXAMPLE_SAMPLE_RATE     (16000)
 #define EXAMPLE_MCLK_MULTIPLE   (384) // If not using 24-bit data width, 256 should be enough
 #define EXAMPLE_MCLK_FREQ_HZ    (EXAMPLE_SAMPLE_RATE * EXAMPLE_MCLK_MULTIPLE)
 #define EXAMPLE_VOICE_VOLUME    CONFIG_EXAMPLE_VOICE_VOLUME
+#define EXAMPLE_MIC_GAIN        CONFIG_EXAMPLE_MIC_GAIN
+#define I2C_OP_TIMEOUT_MS       (1000)
+#define I2C_MASTER_CLK_SPEED    (100000)
 
 /* I2C port and GPIOs */
 #define I2C_NUM         (0)
@@ -45,8 +48,8 @@
 #define I2S_MCK_IO      (GPIO_NUM_43)
 #define I2S_BCK_IO      (GPIO_NUM_42)
 #define I2S_WS_IO       (GPIO_NUM_40)
-#define I2S_DO_IO       (GPIO_NUM_41)
-#define I2S_DI_IO       (GPIO_NUM_39)
+#define I2S_DO_IO       (GPIO_NUM_39)
+#define I2S_DI_IO       (GPIO_NUM_41)
 
 
 

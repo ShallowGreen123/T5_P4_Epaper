@@ -1,24 +1,10 @@
 menu "Example Configuration"
 
-    choice EXAMPLE_MODE
-        prompt "Example mode"
-        default EXAMPLE_MODE_MUSIC
-        help
-            Select example work mode
-
-        config EXAMPLE_MODE_MUSIC
-            bool "music"
-        config EXAMPLE_MODE_ECHO
-            depends on !EXAMPLE_BSP
-            bool "echo"
-    endchoice
-
     choice EXAMPLE_SELECT_MIC_GAIN
         prompt "Set MIC gain"
-        depends on EXAMPLE_MODE_ECHO
         default MIC_GAIN_18DB
         help
-            Select mic gain for echo mode
+            Select analog microphone gain for the ES8311 codec
 
         config MIC_GAIN_0DB
             bool "0dB"
@@ -54,11 +40,5 @@ menu "Example Configuration"
         range 0 100
         default 60
         help
-            Set voice volume
-
-    config EXAMPLE_BSP
-        bool "Enable Board Support Package (BSP) support"
-        default n
-        help
-            Use BSP to setup all hardware settings. Specific board must be selected in main/idf_component.yml file.
+            Set speaker output volume
 endmenu
