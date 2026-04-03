@@ -1,19 +1,214 @@
 
-主因大概率是 GPIO36 的启动脚冲突，不是软件初始化。
+# T5_P4_E_Paper
 
-屏幕的 STV 直接接到了 GPIO36，而 Espressif 对 ESP32-P4 的下载条件明确要求 `GPIO35=0`、`GPIO36=1`，并且这些 strap 会在 EN 拉高后的很短窗口里被采样。屏幕一插上，GPIO36 就不再是“空着的 strap 脚”，而是被面板/走线/负载占住了，所以复位时很容易不是稳定高电平，ROM 就不会进下载模式。
+这是一个面向 `LILYGO T5-P4 E-Paper` 开发板的示例仓库，主要包含两套开发路线：
 
-如果你走的是原生 USB 下载，还要额外警惕 GPIO24/25 的冲突，因为这块板的 EPD CKH/STH 也占了这两个脚。也就是说，这块板的屏幕不只是“显示器”，它还把几个下载/启动相关脚直接占用了。参考：原理图复盘、原理图复盘、ESP32-P4 下载条件。
+- `examples/`：纯 `ESP-IDF` 示例
+- `platformIO_P4/`：`PlatformIO + Arduino` 示例
 
-最直接的验证是先拔屏再进下载模式；或者插屏时用示波器看 GPIO36 在 EN 拉高后的采样窗里是不是还保持高电平。要想边插屏边烧录，通常得给 STV 做隔离/缓冲，或者让面板侧在下载阶段高阻。
+如果你是第一次接触这个项目，建议先看完这份 README，再决定走哪一条路线。
 
-[ESP32-P4 芯片启动条件](https://docs.espressif.com/projects/esp-techpedia/zh_CN/latest/esp-friends/get-started/try-firmware/try-firmware-hardware/esp32p4.html)
+## 这个项目里有什么
 
-[ESP硬件设计指南](https://docs.espressif.com/projects/esp-hardware-design-guidelines/zh_CN/latest/esp32p4/schematic-checklist-esp32p4.html)
+### 1. `examples/`
+
+根目录的 `examples/` 是纯 `ESP-IDF` 示例，适合：
+
+- 已经在用 Espressif 官方工具链
+- 想看更底层的初始化和驱动写法
+- 想做正式项目集成
+
+当前示例包括：
+
+- `pca9535`：IO 扩展芯片读取
+- `i2c_tools`：I2C 工具示例
+- `sgm38121`：电源相关芯片示例
+- `es8311_mic_speak` / `es8311_spiffs`：音频相关示例
+- `hdmi_video_renderer` / `hdmi_video_renderer_lvgl`：显示相关示例
+- `c6_wifi_scan`：通过板载 `ESP32-C6` 扫描 WiFi
+
+### 2. `platformIO_P4/`
+
+`platformIO_P4/` 是 `PlatformIO + Arduino` 版本示例，适合：
+
+- 更熟悉 Arduino 风格开发
+- 想更快试运行功能
+- 想直接在 PlatformIO 工程里切换示例
+
+典型示例包括：
+
+- `i2c_scan`
+- `c6_wifi_conn`
+- `c6_wifi_scan`
+- `sd_card`
+- `rtc`
+- `touch_gt911`
+- `lvgl_demo`
+
+### 3. `docs/`
+
+文档目录里放的是补充说明，建议优先看这几个：
+
+- `docs/esp-hosted-c6-Slave.md`：板载 `ESP32-C6` 的 `esp-hosted` 从机说明
+- `docs/arduino.md`：如何把 Arduino 作为 ESP-IDF component 使用
+- `docs/pinmap.md`：引脚和硬件说明
+
+### 4. `hardware/`
+
+硬件目录里有原理图和芯片资料，遇到硬件问题时很有用。
+
+常用文件：
+
+- `hardware/T5-P4 E-paper V0.1.pdf`
+- `hardware/IT8951_D_V0.2.4.3_20170728.pdf`
+- `hardware/lt8912.pdf`
+- `hardware/pca9535.pdf`
+
+## 新手怎么选路线
+
+### 先做功能验证
+
+如果你只是想确认板子和工具链通了，推荐先跑这两个：
+
+1. `examples/pca9535`
+2. `platformIO_P4/examples/i2c_scan`
+
+这两个示例依赖少，最适合确认串口、下载、I2C 是否正常。
+
+### 想测试板载 C6 WiFi
+
+推荐顺序：
+
+1. 先看 `docs/esp-hosted-c6-Slave.md`
+2. 先给板载 `ESP32-C6` 烧录 `esp-hosted` slave 固件
+3. 再运行 `examples/c6_wifi_scan` 或 `platformIO_P4/examples/c6_wifi_scan`
+
+注意：`c6_wifi_scan` 不是开箱即用，它依赖 C6 端固件已经准备好。
+
+### 想走 Arduino / PlatformIO
+
+直接看 `platformIO_P4/README.md`，然后在 `platformIO_P4/platformio.ini` 里切换 `src_dir` 即可。
+
+## 5 分钟上手
+
+### 路线 A：ESP-IDF
+
+先进入一个简单示例目录，比如：
+
+```bash
+cd examples/pca9535
+```
+
+然后执行：
+
+```bash
+idf.py set-target esp32p4
+idf.py build
+idf.py -p <PORT> flash monitor
+```
+
+如果你想测试 WiFi 扫描：
+
+```bash
+cd examples/c6_wifi_scan
+idf.py set-target esp32p4
+idf.py build
+idf.py -p <PORT> flash monitor
+```
+
+前提是板载 `ESP32-C6` 已经刷好 `esp-hosted` slave 固件。
+
+### 路线 B：PlatformIO + Arduino
+
+进入工程目录：
+
+```bash
+cd platformIO_P4
+```
+
+打开 `platformio.ini`，把 `src_dir` 切到你要运行的示例，例如：
+
+```ini
+src_dir = examples/c6_wifi_scan
+```
+
+然后执行：
+
+```bash
+pio run
+pio run -t upload
+pio device monitor
+```
+
+## 推荐新手起步顺序
+
+如果你完全是第一次接触这块板子，建议按这个顺序来：
+
+1. 先确认串口和下载正常
+2. 跑一个最简单的 `I2C` 或 `PCA9535` 示例
+3. 再尝试 `PlatformIO` 或 `ESP-IDF` 其中一条主开发路线
+4. 最后再碰 `C6 WiFi`、音频、HDMI、LVGL 这些依赖更多的功能
+
+## 关键硬件信息
+
+下面这些引脚是最常用、最值得先记住的：
+
+| 功能 | 引脚 |
+| --- | --- |
+| I2C SDA | `7` |
+| I2C SCL | `8` |
+| SPI MISO | `44` |
+| SPI SCK | `45` |
+| SPI MOSI | `46` |
+| SD CS | `47` |
+| Touch INT | `3` |
+| C6 SDIO D0/D1/D2/D3 | `14 / 15 / 16 / 17` |
+| C6 SDIO CLK/CMD | `18 / 19` |
+| C6 RST | `54` |
+| C6 WAKEUP | `6` |
+
+如果你需要完整引脚定义，请看 `docs/pinmap.md` 或具体示例代码。
+
+## 常见问题
+
+### 1. 编译不过
+
+- 根目录 `examples/` 需要 `ESP-IDF 5.4` 左右环境
+- `idf.py set-target` 必须设为 `esp32p4`
+- `PlatformIO` 和 `ESP-IDF` 两套工程不要混着编
+
+### 2. `c6_wifi_scan` 跑不起来
+
+优先检查：
+
+- 板载 `ESP32-C6` 是否已经烧录 `esp-hosted` slave 固件
+- 是否使用了正确的 `esp32p4` 目标
+- 串口日志里是否出现 `esp_wifi_remote` / `Received Slave ESP Init`
+
+### 3. 下载不稳定
+
+这块板子的屏幕和部分启动相关引脚有耦合，某些情况下会影响下载模式进入。
+
+如果你遇到反复下载失败：
+
+- 先确认供电稳定
+- 尽量先跑最简单的示例排除软件问题
+- 再结合原理图和硬件资料排查
+
+## 从哪里继续深入
+
+你可以按自己的目标继续看：
+
+- 想做纯 IDF：从 `examples/` 开始
+- 想快速做应用：从 `platformIO_P4/` 开始
+- 想接入板载 C6 WiFi：先看 `docs/esp-hosted-c6-Slave.md`
+- 想查引脚和芯片：看 `docs/` 和 `hardware/`
+
+如果只是想“先跑起来一个东西”，推荐从 `examples/pca9535` 或 `platformIO_P4/examples/i2c_scan` 开始。
 
 ---
 
-## :four: 引脚 🎁
+## 引脚 🎁
 ~~~c
 // IIC Addr
 #define BOARD_I2C_ADDR_14           (0x14)
