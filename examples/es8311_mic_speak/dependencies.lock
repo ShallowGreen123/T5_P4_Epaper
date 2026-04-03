@@ -154,6 +154,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.0.0
+  espressif/es8311:
+    component_hash: 46b3117250344bb03f143d5e2becf81cfb111679fbd7b95cefc2d302d36cc393
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4,<6.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.0~1
   espressif/esp-dsp:
     component_hash: 42dce32d46ac93dc11f60d368e29a830e9661c7345d794b8a45c343479cae636
     dependencies:
@@ -271,7 +281,8 @@ dependencies:
 direct_dependencies:
 - SensorLib
 - espressif/arduino-esp32
+- espressif/es8311
 - idf
-manifest_hash: 52bcc72a924d3f95c53dfb6a91ca5fb606824e3077abe6e01a07b24f13410839
+manifest_hash: fe5a95827264431753b58a214e5236e03e5d15208c670326f227397e3dd078ca
 target: esp32p4
 version: 2.0.0
