@@ -19,7 +19,6 @@
 #define PCA9535_ADDR                 (0x20)
 #define PCA9535_OUTPUT_PORT_0_REG    (0x02)
 #define PCA9535_CONFIG_PORT_0_REG    (0x06)
-#define PCA9535_AUDIO_SHUTDOWN_MASK  BIT(5)
 #define AUDIO_AMP_STABLE_DELAY_MS    (10)
 
 static const char *TAG = "es8311_mic_speak";
@@ -65,10 +64,10 @@ static esp_err_t pca9535_write_registers(uint8_t start_reg, const uint8_t *data,
     return i2c_master_write_to_device(I2C_NUM, PCA9535_ADDR, buffer, len + 1, pdMS_TO_TICKS(I2C_OP_TIMEOUT_MS));
 }
 
-static esp_err_t board_audio_amp_enable(void)
+esp_err_t board_audio_amp_set(bool enable)
 {
-    const uint8_t output_state[2] = {PCA9535_AUDIO_SHUTDOWN_MASK, 0x00};
-    const uint8_t config_state[2] = {(uint8_t)~PCA9535_AUDIO_SHUTDOWN_MASK, 0xFF};
+    const uint8_t output_state[2] = {(uint8_t)(enable ? BOARD_PCA_05_SHUTDOWN : 0x00), 0x00};
+    const uint8_t config_state[2] = {(uint8_t)~BOARD_PCA_05_SHUTDOWN, 0xFF};
 
     ESP_RETURN_ON_ERROR(board_i2c_init(), TAG, "I2C init failed");
     ESP_RETURN_ON_ERROR(pca9535_write_registers(PCA9535_OUTPUT_PORT_0_REG, output_state, sizeof(output_state)),
@@ -77,7 +76,7 @@ static esp_err_t board_audio_amp_enable(void)
                         TAG, "Set PCA9535 direction failed");
 
     vTaskDelay(pdMS_TO_TICKS(AUDIO_AMP_STABLE_DELAY_MS));
-    ESP_LOGI(TAG, "Audio amplifier enabled through PCA9535");
+    ESP_LOGI(TAG, "Audio amplifier %s through PCA9535 IO5", enable ? "enabled" : "disabled");
     return ESP_OK;
 }
 
@@ -91,7 +90,7 @@ static esp_err_t es8311_codec_init(void)
         .sample_frequency = EXAMPLE_SAMPLE_RATE,
     };
 
-    ESP_RETURN_ON_ERROR(board_audio_amp_enable(), TAG, "Audio amplifier enable failed");
+    ESP_RETURN_ON_ERROR(board_audio_amp_set(true), TAG, "Audio amplifier enable failed");
 
     if (s_es8311 == NULL) {
         s_es8311 = es8311_create(I2C_NUM, ES8311_ADDRRES_0);

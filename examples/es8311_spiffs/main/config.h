@@ -30,6 +30,9 @@
 #define I2C_SDA_IO                       BOARD_I2C_SDA
 #define I2C_SCL_IO                       BOARD_I2C_SCL
 
+// PCA9535 IO expander
+#define BOARD_PCA_05_SHUTDOWN            (0x0020)
+
 #define I2S_MCK_IO                       GPIO_NUM_43
 #define I2S_BCK_IO                       GPIO_NUM_42
 #define I2S_WS_IO                        GPIO_NUM_40

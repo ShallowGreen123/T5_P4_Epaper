@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -14,6 +15,7 @@ extern "C" {
 esp_err_t board_audio_player_init(void);
 esp_err_t board_audio_player_deinit(void);
 esp_err_t board_audio_player_set_volume(int volume);
+esp_err_t board_audio_amp_set(bool enable);
 
 esp_err_t board_audio_player_mute(AUDIO_PLAYER_MUTE_SETTING setting);
 esp_err_t board_i2s_reconfig_clk(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t slot_mode);
