@@ -4,11 +4,23 @@
 
 参考 https://github.com/espressif/esp-hosted-mcu/tree/main/slave
 
-与 iperf 例程一起使用，测试网络通信速度；
+## esp-hosted-slave
 
-ESP32-C6-MINI 需要下载 esp-hosted-mcu 项目中的 slave 固件 (也就是当前目录下的 esp-hosted-c6-slave)，才可以通过 SDIO 与 P4 通信；
+ESP32-C6-MINI 需要编译下载 esp-hosted-mcu 项目中的 slave 程序才可以通过 SDIO 与 ESP32-P4 通信，编译改项目需要的 esp-idf 版本 `version: ">=5.3" `
 
-下载方式：
+esp-hosted-mcu 编译步骤：
+
+1. 克隆项目到本地：`git clone --recursive https://github.com/espressif/esp-hosted-mcu/tree/main`
+
+2. 进入 `esp-hosted-mcu/slave` 目录下面
+
+3. 设置目标芯片：`idf.py set-target esp32c6`
+
+4. 编译项目：`idf.py build`
+
+5. 编译完成后下载：`idf.py -p <your_port> flash`
+
+## 下载方式：
 
 1. 使用 usb 转串口工具与 ESP32-C6-MINI 模块连接；C6-MINI 与串口的接线为 TX-RX、RX-TX、GND-GND、BOOT-GND；C6-MINI 的 BOOT 引脚需要接地进入下载模式；
 
