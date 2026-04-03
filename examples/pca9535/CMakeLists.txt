@@ -2,12 +2,15 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
+if(NOT DEFINED IDF_TARGET)
+    set(IDF_TARGET "esp32p4")
+endif()
+
 add_compile_options(
-    "-DBOARD_I2C_SDA=7" 
+    "-DBOARD_I2C_SDA=7"
     "-DBOARD_I2C_SCL=8"
     "-DBOARD_I2C_NUM=I2C_NUM_0"
 )
-
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(pca9535)
