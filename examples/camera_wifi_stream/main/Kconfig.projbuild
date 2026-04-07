@@ -1,0 +1,99 @@
+menu "Camera WiFi Stream Configuration"
+
+config CAMERA_WIFI_STREAM_WIFI_SSID
+    string "WiFi SSID"
+    default ""
+
+config CAMERA_WIFI_STREAM_WIFI_PASSWORD
+    string "WiFi password"
+    default ""
+
+config CAMERA_WIFI_STREAM_MAXIMUM_RETRY
+    int "Maximum WiFi retry count"
+    range 0 20
+    default 5
+
+config CAMERA_WIFI_STREAM_JPEG_QUALITY
+    int "JPEG quality"
+    range 1 100
+    default 80
+
+choice CAMERA_WIFI_STREAM_SENSOR
+    prompt "Camera sensor"
+    default CAMERA_WIFI_STREAM_SENSOR_OV2710
+
+    config CAMERA_WIFI_STREAM_SENSOR_OV2710
+        bool "OV2710"
+        select CAMERA_OV2710
+        select CAMERA_OV2710_MIPI_RAW10_1280X720_25FPS
+
+    config CAMERA_WIFI_STREAM_SENSOR_SC2336
+        bool "SC2336"
+        select CAMERA_SC2336
+        select CAMERA_SC2336_MIPI_RAW8_1280X720_30FPS
+
+    config CAMERA_WIFI_STREAM_SENSOR_OV5645
+        bool "OV5645"
+        select CAMERA_OV5645
+        select CAMERA_OV5645_MIPI_YUV422_1280X960_30FPS
+endchoice
+
+config CAMERA_WIFI_STREAM_I2C_PORT
+    int "I2C/SCCB port"
+    range 0 2
+    default 0
+
+config CAMERA_WIFI_STREAM_I2C_SDA
+    int "I2C/SCCB SDA GPIO"
+    range 0 54
+    default 7
+
+config CAMERA_WIFI_STREAM_I2C_SCL
+    int "I2C/SCCB SCL GPIO"
+    range 0 54
+    default 8
+
+config CAMERA_WIFI_STREAM_I2C_FREQ_HZ
+    int "I2C/SCCB clock frequency (Hz)"
+    range 10000 400000
+    default 100000
+
+config CAMERA_WIFI_STREAM_ENABLE_CAMERA_POWER
+    bool "Enable camera power through SGM38121 on boot"
+    default y
+
+config CAMERA_WIFI_STREAM_AVDD1_MV
+    int "SGM38121 AVDD1 target voltage (mV)"
+    depends on CAMERA_WIFI_STREAM_ENABLE_CAMERA_POWER
+    range 1504 3424
+    default 1800
+
+config CAMERA_WIFI_STREAM_AVDD2_MV
+    int "SGM38121 AVDD2 target voltage (mV)"
+    depends on CAMERA_WIFI_STREAM_ENABLE_CAMERA_POWER
+    range 1504 3424
+    default 2800
+
+config CAMERA_WIFI_STREAM_RESET_GPIO
+    int "Camera RESET GPIO (-1 to disable)"
+    range -1 54
+    default -1
+
+config CAMERA_WIFI_STREAM_PWDN_GPIO
+    int "Camera PWDN GPIO (-1 to disable)"
+    range -1 54
+    default -1
+
+config CAMERA_WIFI_STREAM_XCLK_GPIO
+    int "Camera XCLK GPIO (-1 to disable)"
+    range -1 54
+    default -1
+
+config CAMERA_WIFI_STREAM_XCLK_FREQ_HZ
+    int "Camera XCLK frequency (Hz)"
+    range 1000000 40000000
+    default 24000000
+    help
+        Ignored when XCLK GPIO is set to -1.
+
+endmenu
