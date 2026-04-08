@@ -20,6 +20,14 @@ esp-hosted-mcu 编译步骤：
 
 5. 编译完成后下载：`idf.py -p <your_port> flash`
 
+
+python -m esptool --chip esp32c6 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 4MB --flash_freq 80m 
+
+0x0     build\bootloader\bootloader.bin 
+0x8000  build\partition_table\partition-table.bin 
+0xd000  build\ota_data_initial.bin 
+0x10000 build\network_adapter.bin
+
 ## 下载方式：
 
 1. 使用 usb 转串口工具与 ESP32-C6-MINI 模块连接；C6-MINI 与串口的接线为 TX-RX、RX-TX、GND-GND、BOOT-GND；C6-MINI 的 BOOT 引脚需要接地进入下载模式；

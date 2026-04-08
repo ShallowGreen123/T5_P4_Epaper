@@ -1,12 +1,14 @@
 
 # T5_P4_E_Paper
 
-这是一个面向 `LILYGO T5-P4 E-Paper` 开发板的示例仓库，主要包含两套开发路线：
+这是一个面向 `LILYGO T5-P4 E-Paper` 开发板的纯 `ESP-IDF` 示例仓库。
 
-- `examples/`：纯 `ESP-IDF` 示例
-- `platformIO_P4/`：`PlatformIO + Arduino` 示例
+- `examples/`：`ESP-IDF` 示例工程
+- `docs/`：补充说明和调试记录
+- `firmware/`：板载 `ESP32-C6` 相关固件
+- `hardware/`：原理图和芯片资料
 
-如果你是第一次接触这个项目，建议先看完这份 README，再决定走哪一条路线。
+如果你是第一次接触这个项目，建议先从 `examples/pca9535` 或 `examples/i2c_tools` 开始确认串口、下载和 I2C 是否正常。
 
 ## 这个项目里有什么
 
@@ -24,34 +26,22 @@
 - `i2c_tools`：I2C 工具示例
 - `sgm38121`：电源相关芯片示例
 - `es8311_mic_speak` / `es8311_spiffs`：音频相关示例
-- `hdmi_video_renderer` / `hdmi_video_renderer_lvgl`：显示相关示例
+- `fastEPD_lvgl_demo` / `hdmi_video_renderer` / `hdmi_video_renderer_lvgl`：显示相关示例
 - `c6_wifi_scan`：通过板载 `ESP32-C6` 扫描 WiFi
+- `camera_id_detect`：读取摄像头 ID 并识别 `SC2336` / `OV2710` / `OV5645`
+- `camera_wifi_stream`：通过 WiFi 输出摄像头 MJPEG 画面
 
-### 2. `platformIO_P4/`
-
-`platformIO_P4/` 是 `PlatformIO + Arduino` 版本示例，适合：
-
-- 更熟悉 Arduino 风格开发
-- 想更快试运行功能
-- 想直接在 PlatformIO 工程里切换示例
-
-典型示例包括：
-
-- `i2c_scan`
-- `c6_wifi_conn`
-- `c6_wifi_scan`
-- `sd_card`
-- `rtc`
-- `touch_gt911`
-- `lvgl_demo`
-
-### 3. `docs/`
+### 2. `docs/`
 
 文档目录里放的是补充说明，建议优先看这几个：
 
 - `docs/esp-hosted-c6-Slave.md`：板载 `ESP32-C6` 的 `esp-hosted` 从机说明
-- `docs/arduino.md`：如何把 Arduino 作为 ESP-IDF component 使用
 - `docs/pinmap.md`：引脚和硬件说明
+- `docs/camera-sensor-power.md`：摄像头供电和上电顺序说明
+
+### 3. `firmware/`
+
+`firmware/` 里放的是配套固件，例如板载 `ESP32-C6` 使用的 `esp-hosted` slave 固件。运行 `examples/c6_wifi_scan` 前，需要先确认 C6 端固件已经烧录好。
 
 ### 4. `hardware/`
 
@@ -64,14 +54,14 @@
 - `hardware/lt8912.pdf`
 - `hardware/pca9535.pdf`
 
-## 新手怎么选路线
+## 新手怎么开始
 
 ### 先做功能验证
 
-如果你只是想确认板子和工具链通了，推荐先跑这两个：
+如果你只是想确认板子和工具链通了，推荐先跑这两个 ESP-IDF 示例：
 
 1. `examples/pca9535`
-2. `platformIO_P4/examples/i2c_scan`
+2. `examples/i2c_tools`
 
 这两个示例依赖少，最适合确认串口、下载、I2C 是否正常。
 
@@ -81,17 +71,13 @@
 
 1. 先看 `docs/esp-hosted-c6-Slave.md`
 2. 先给板载 `ESP32-C6` 烧录 `esp-hosted` slave 固件
-3. 再运行 `examples/c6_wifi_scan` 或 `platformIO_P4/examples/c6_wifi_scan`
+3. 再运行 `examples/c6_wifi_scan`
 
 注意：`c6_wifi_scan` 不是开箱即用，它依赖 C6 端固件已经准备好。
 
-### 想走 Arduino / PlatformIO
-
-直接看 `platformIO_P4/README.md`，然后在 `platformIO_P4/platformio.ini` 里切换 `src_dir` 即可。
-
 ## 5 分钟上手
 
-### 路线 A：ESP-IDF
+### ESP-IDF
 
 先进入一个简单示例目录，比如：
 
@@ -118,36 +104,14 @@ idf.py -p <PORT> flash monitor
 
 前提是板载 `ESP32-C6` 已经刷好 `esp-hosted` slave 固件。
 
-### 路线 B：PlatformIO + Arduino
-
-进入工程目录：
-
-```bash
-cd platformIO_P4
-```
-
-打开 `platformio.ini`，把 `src_dir` 切到你要运行的示例，例如：
-
-```ini
-src_dir = examples/c6_wifi_scan
-```
-
-然后执行：
-
-```bash
-pio run
-pio run -t upload
-pio device monitor
-```
-
 ## 推荐新手起步顺序
 
 如果你完全是第一次接触这块板子，建议按这个顺序来：
 
 1. 先确认串口和下载正常
 2. 跑一个最简单的 `I2C` 或 `PCA9535` 示例
-3. 再尝试 `PlatformIO` 或 `ESP-IDF` 其中一条主开发路线
-4. 最后再碰 `C6 WiFi`、音频、HDMI、LVGL 这些依赖更多的功能
+3. 再尝试 `C6 WiFi`
+4. 最后再碰音频、HDMI、LVGL、摄像头这些依赖更多的功能
 
 ## 关键硬件信息
 
@@ -175,7 +139,6 @@ pio device monitor
 
 - 根目录 `examples/` 需要 `ESP-IDF 5.4` 左右环境
 - `idf.py set-target` 必须设为 `esp32p4`
-- `PlatformIO` 和 `ESP-IDF` 两套工程不要混着编
 
 ### 2. `c6_wifi_scan` 跑不起来
 
@@ -200,11 +163,11 @@ pio device monitor
 你可以按自己的目标继续看：
 
 - 想做纯 IDF：从 `examples/` 开始
-- 想快速做应用：从 `platformIO_P4/` 开始
 - 想接入板载 C6 WiFi：先看 `docs/esp-hosted-c6-Slave.md`
+- 想接入摄像头：先看 `docs/camera-sensor-power.md` 和 `examples/camera_id_detect`
 - 想查引脚和芯片：看 `docs/` 和 `hardware/`
 
-如果只是想“先跑起来一个东西”，推荐从 `examples/pca9535` 或 `platformIO_P4/examples/i2c_scan` 开始。
+如果只是想“先跑起来一个东西”，推荐从 `examples/pca9535` 或 `examples/i2c_tools` 开始。
 
 ---
 
@@ -311,5 +274,4 @@ pio device monitor
 #define BOARD_HDMI_DDC_SDA (9)
 #define BOARD_HDMI_DDC_SCL (10)
 ~~~
-
 

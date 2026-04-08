@@ -13,7 +13,7 @@ through the on-board ESP32-C6 over SDIO.
 You can refer to:
 
 - `docs/esp-hosted-c6-Slave.md`
-- `platformIO_P4/firmware/esp_hosted_esp32c6_slave_1.4.1.bin`
+- `firmware/esp_hosted_slave_c6_sdio_2.12.3.bin`
 
 ## Build
 
