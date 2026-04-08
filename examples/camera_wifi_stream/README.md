@@ -14,3 +14,12 @@ idf.py build
 ```
 
 Set `Camera WiFi Stream Configuration -> WiFi SSID/password` before flashing.
+
+Streaming defaults are tuned for the ESP32-C6 hosted WiFi link: JPEG quality 88, a
+12 fps MJPEG output cap, 4 capture buffers, and WiFi power save disabled. If the
+picture is still soft, first adjust the lens focus, then try raising `JPEG quality`;
+if it stutters, lower `Maximum MJPEG stream FPS`.
+
+SGM38121 `DVDD1` and `DVDD2` default to `0 mV`, which keeps those outputs
+disabled. Set non-zero DVDD targets in menuconfig only if your camera module
+needs those rails.

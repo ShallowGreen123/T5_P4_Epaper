@@ -44,15 +44,35 @@
 #define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
 #endif
 
+#ifndef CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS
+#define CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS 12
+#endif
+
+#ifndef CONFIG_CAMERA_WIFI_STREAM_VIDEO_BUFFER_COUNT
+#define CONFIG_CAMERA_WIFI_STREAM_VIDEO_BUFFER_COUNT 4
+#endif
+
+#ifndef CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV
+#define CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV 0
+#endif
+
+#ifndef CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV
+#define CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV 0
+#endif
+
 #define SGM38121_I2C_ADDR                    0x28
 #define SGM38121_REG_CHIP_REV                0x00
 #define SGM38121_REG_DISCH                   0x02
+#define SGM38121_REG_DVDD1_VOUT              0x03
+#define SGM38121_REG_DVDD2_VOUT              0x04
 #define SGM38121_REG_AVDD1_VOUT              0x05
 #define SGM38121_REG_AVDD2_VOUT              0x06
 #define SGM38121_REG_FUNCTION                0x07
 #define SGM38121_REG_SEQ_DVDD                0x0A
 #define SGM38121_REG_SEQ_AVDD                0x0B
 #define SGM38121_REG_ENABLE                  0x0E
+#define SGM38121_ENABLE_DVDD1_BIT            BIT0
+#define SGM38121_ENABLE_DVDD2_BIT            BIT1
 #define SGM38121_ENABLE_AVDD1_BIT            BIT2
 #define SGM38121_ENABLE_AVDD2_BIT            BIT3
 
@@ -62,7 +82,7 @@
 
 #define CAMERA_POWER_SETTLE_MS               20
 #define I2C_TIMEOUT_MS                       100
-#define VIDEO_BUFFER_COUNT                   2
+#define VIDEO_BUFFER_COUNT                   CONFIG_CAMERA_WIFI_STREAM_VIDEO_BUFFER_COUNT
 #define WIFI_CONNECTED_BIT                   BIT0
 #define WIFI_FAIL_BIT                        BIT1
 #define HTTP_PART_BOUNDARY                   "frame"
@@ -120,38 +140,40 @@ static esp_err_t sgm_write_reg(uint8_t reg, uint8_t value)
     return i2c_master_transmit(s_sgm, payload, sizeof(payload), I2C_TIMEOUT_MS);
 }
 
-static int sgm_decode_avdd_mv(uint8_t reg_value)
+static uint8_t sgm_encode_vout_mv_rounded(int target_mv, int min_mv, int max_mv, int offset_mv, int min_reg, int max_reg, int *actual_mv)
 {
-    if (reg_value < 0x0F) {
-        return -1;
+    int clamped_mv = target_mv;
+
+    if (clamped_mv < min_mv) {
+        clamped_mv = min_mv;
     }
-    return 1384 + (reg_value * 8);
+    if (clamped_mv > max_mv) {
+        clamped_mv = max_mv;
+    }
+
+    int reg_value = (clamped_mv - offset_mv + 4) / 8;
+    if (reg_value < min_reg) {
+        reg_value = min_reg;
+    }
+    if (reg_value > max_reg) {
+        reg_value = max_reg;
+    }
+
+    if (actual_mv != NULL) {
+        *actual_mv = offset_mv + (reg_value * 8);
+    }
+
+    return (uint8_t)reg_value;
+}
+
+static uint8_t sgm_encode_dvdd_mv_rounded(int target_mv, int *actual_mv)
+{
+    return sgm_encode_vout_mv_rounded(target_mv, 528, 1504, 504, 0x03, 0x7D, actual_mv);
 }
 
 static uint8_t sgm_encode_avdd_mv_rounded(int target_mv, int *actual_mv)
 {
-    int clamped_mv = target_mv;
-
-    if (clamped_mv < 1504) {
-        clamped_mv = 1504;
-    }
-    if (clamped_mv > 3424) {
-        clamped_mv = 3424;
-    }
-
-    int reg_value = (clamped_mv - 1384 + 4) / 8;
-    if (reg_value < 0x0F) {
-        reg_value = 0x0F;
-    }
-    if (reg_value > 0xFF) {
-        reg_value = 0xFF;
-    }
-
-    if (actual_mv != NULL) {
-        *actual_mv = sgm_decode_avdd_mv((uint8_t)reg_value);
-    }
-
-    return (uint8_t)reg_value;
+    return sgm_encode_vout_mv_rounded(target_mv, 1504, 3424, 1384, 0x0F, 0xFF, actual_mv);
 }
 
 static const char *probe_status_to_str(esp_err_t err)
@@ -188,6 +210,21 @@ static void camera_probe_known_addresses(const char *label)
             break;
         }
     }
+}
+
+static bool stream_rate_limiter_should_send(uint32_t source_fps, uint32_t target_fps, uint32_t *credit)
+{
+    if (source_fps == 0 || target_fps == 0 || target_fps >= source_fps) {
+        return true;
+    }
+
+    *credit += target_fps;
+    if (*credit < source_fps) {
+        return false;
+    }
+
+    *credit -= source_fps;
+    return true;
 }
 
 static esp_err_t camera_init_i2c_for_power(void)
@@ -251,10 +288,24 @@ static esp_err_t camera_enable_power(void)
 #if CONFIG_CAMERA_WIFI_STREAM_ENABLE_CAMERA_POWER
     int avdd1_actual_mv = 0;
     int avdd2_actual_mv = 0;
-    const uint8_t avdd1_reg = sgm_encode_avdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_AVDD1_MV, &avdd1_actual_mv);
-    const uint8_t avdd2_reg = sgm_encode_avdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_AVDD2_MV, &avdd2_actual_mv);
+    int dvdd1_actual_mv = 0;
+    int dvdd2_actual_mv = 0;
+    uint8_t avdd1_reg = sgm_encode_avdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_AVDD1_MV, &avdd1_actual_mv);
+    uint8_t avdd2_reg = sgm_encode_avdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_AVDD2_MV, &avdd2_actual_mv);
+    uint8_t dvdd1_reg = 0;
+    uint8_t dvdd2_reg = 0;
+    uint8_t enable_mask = SGM38121_ENABLE_AVDD1_BIT | SGM38121_ENABLE_AVDD2_BIT;
     uint8_t chip_rev = 0;
     esp_err_t ret;
+
+    if (CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV > 0) {
+        dvdd1_reg = sgm_encode_dvdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV, &dvdd1_actual_mv);
+        enable_mask |= SGM38121_ENABLE_DVDD1_BIT;
+    }
+    if (CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV > 0) {
+        dvdd2_reg = sgm_encode_dvdd_mv_rounded(CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV, &dvdd2_actual_mv);
+        enable_mask |= SGM38121_ENABLE_DVDD2_BIT;
+    }
 
     ESP_RETURN_ON_ERROR(camera_init_i2c_for_power(), TAG, "camera power I2C init failed");
     camera_probe_known_addresses("before_power_on");
@@ -271,18 +322,40 @@ static esp_err_t camera_enable_power(void)
         ESP_LOGI(TAG, "SGM38121 CHIP_REV=0x%02X", chip_rev);
     }
 
-    ESP_LOGI(TAG, "Enabling camera rails: AVDD1=%d mV AVDD2=%d mV", avdd1_actual_mv, avdd2_actual_mv);
+    ESP_LOGI(TAG,
+             "Enabling camera rails: DVDD1=%d mV DVDD2=%d mV AVDD1=%d mV AVDD2=%d mV",
+             dvdd1_actual_mv,
+             dvdd2_actual_mv,
+             avdd1_actual_mv,
+             avdd2_actual_mv);
 
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_SEQ_DVDD, 0x00), fail, TAG, "set DVDD sequence failed");
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_SEQ_AVDD, 0x00), fail, TAG, "set AVDD sequence failed");
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_FUNCTION, 0x00), fail, TAG, "disable wake-up failed");
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_DISCH, 0x00), fail, TAG, "set discharge mode failed");
+    if (CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV > 0) {
+        if (dvdd1_actual_mv != CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV) {
+            ESP_LOGW(TAG,
+                     "DVDD1 requested %d mV, rounded/clamped to %d mV (reg=0x%02X)",
+                     CONFIG_CAMERA_WIFI_STREAM_DVDD1_MV,
+                     dvdd1_actual_mv,
+                     dvdd1_reg);
+        }
+        ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_DVDD1_VOUT, dvdd1_reg), fail, TAG, "write DVDD1 failed");
+    }
+    if (CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV > 0) {
+        if (dvdd2_actual_mv != CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV) {
+            ESP_LOGW(TAG,
+                     "DVDD2 requested %d mV, rounded/clamped to %d mV (reg=0x%02X)",
+                     CONFIG_CAMERA_WIFI_STREAM_DVDD2_MV,
+                     dvdd2_actual_mv,
+                     dvdd2_reg);
+        }
+        ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_DVDD2_VOUT, dvdd2_reg), fail, TAG, "write DVDD2 failed");
+    }
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_AVDD1_VOUT, avdd1_reg), fail, TAG, "write AVDD1 failed");
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_AVDD2_VOUT, avdd2_reg), fail, TAG, "write AVDD2 failed");
-    ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_ENABLE, SGM38121_ENABLE_AVDD1_BIT | SGM38121_ENABLE_AVDD2_BIT),
-                      fail,
-                      TAG,
-                      "enable camera rails failed");
+    ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_ENABLE, enable_mask), fail, TAG, "enable camera rails failed");
 
     vTaskDelay(pdMS_TO_TICKS(CAMERA_POWER_SETTLE_MS));
     camera_probe_known_addresses("after_power_on");
@@ -751,6 +824,15 @@ static esp_err_t wifi_init_sta(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "set WiFi config failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start WiFi failed");
 
+#if !CONFIG_CAMERA_WIFI_STREAM_ENABLE_WIFI_PS
+    esp_err_t ps_ret = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (ps_ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi power save disabled for lower stream latency");
+    } else {
+        ESP_LOGW(TAG, "Disable WiFi power save failed: %s", esp_err_to_name(ps_ret));
+    }
+#endif
+
     ESP_LOGI(TAG, "Connecting to WiFi SSID \"%s\" via ESP32-C6 hosted link", CONFIG_CAMERA_WIFI_STREAM_WIFI_SSID);
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
 
@@ -780,6 +862,20 @@ static esp_err_t stream_handler(httpd_req_t *req)
     camera_stream_ctx_t *video = (camera_stream_ctx_t *)req->user_ctx;
     esp_err_t ret = ESP_OK;
     char part_header[96];
+    char fps_header[16];
+    uint32_t source_fps = video->frame_rate;
+    uint32_t target_fps = CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS;
+    uint32_t frame_credit;
+    uint32_t frames_sent = 0;
+    uint32_t frames_skipped = 0;
+
+    if (source_fps == 0) {
+        source_fps = 25;
+    }
+    if (target_fps == 0 || target_fps > source_fps) {
+        target_fps = source_fps;
+    }
+    frame_credit = source_fps;
 
     if (xSemaphoreTake(video->stream_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -791,6 +887,15 @@ static esp_err_t stream_handler(httpd_req_t *req)
     ESP_GOTO_ON_ERROR(httpd_resp_set_type(req, STREAM_CONTENT_TYPE), done, TAG, "set stream content type failed");
     ESP_GOTO_ON_ERROR(httpd_resp_set_hdr(req, "Cache-Control", "no-cache"), done, TAG, "set cache header failed");
     ESP_GOTO_ON_ERROR(httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*"), done, TAG, "set CORS header failed");
+    ESP_GOTO_ON_FALSE(snprintf(fps_header, sizeof(fps_header), "%" PRIu32, target_fps) > 0,
+                      ESP_FAIL,
+                      done,
+                      TAG,
+                      "format FPS header failed");
+    ESP_GOTO_ON_ERROR(httpd_resp_set_hdr(req, "X-Framerate", fps_header), done, TAG, "set framerate header failed");
+    if (target_fps < source_fps) {
+        ESP_LOGI(TAG, "Limiting MJPEG output to %" PRIu32 " fps from %" PRIu32 " fps capture", target_fps, source_fps);
+    }
 
     while (true) {
         struct v4l2_buffer buf = {
@@ -814,6 +919,11 @@ static esp_err_t stream_handler(httpd_req_t *req)
             ioctl(video->fd, VIDIOC_QBUF, &buf);
             have_buffer = false;
             continue;
+        }
+
+        if (!stream_rate_limiter_should_send(source_fps, target_fps, &frame_credit)) {
+            frames_skipped++;
+            goto frame_done;
         }
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
@@ -851,6 +961,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
         }
 
         ret = httpd_resp_send_chunk(req, (const char *)jpeg_data, jpeg_size);
+        if (ret == ESP_OK) {
+            frames_sent++;
+        }
 
 frame_done:
         if (have_buffer) {
@@ -868,7 +981,10 @@ frame_done:
 
 done:
     xSemaphoreGive(video->stream_lock);
-    ESP_LOGI(TAG, "MJPEG stream client disconnected");
+    ESP_LOGI(TAG,
+             "MJPEG stream client disconnected, sent=%" PRIu32 " skipped=%" PRIu32,
+             frames_sent,
+             frames_skipped);
     return ret;
 }
 
