@@ -1,6 +1,8 @@
 
 # T5_P4_E_Paper
 
+[![esp-idf-v5.4 Build](https://github.com/ShallowGreen123/T5_P4_Epaper/actions/workflows/examples-build.yml/badge.svg)](https://github.com/ShallowGreen123/T5_P4_Epaper/actions/workflows/examples-build.yml)
+
 这是一个面向 `LILYGO T5-P4 E-Paper` 开发板的纯 `ESP-IDF` 示例仓库。
 
 - `examples/`：`ESP-IDF` 示例工程
