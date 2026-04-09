@@ -1,0 +1,67 @@
+name: Build Examples
+
+on:
+  push:
+    paths:
+      - "examples/**"
+      - ".github/workflows/examples-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: examples-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    name: Discover examples
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.examples.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build example matrix
+        id: examples
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          examples_dir = Path("examples")
+          examples = sorted(
+              entry.name
+              for entry in examples_dir.iterdir()
+              if entry.is_dir() and (entry / "CMakeLists.txt").is_file()
+          )
+
+          print(f"matrix={json.dumps({'example': examples})}")
+          PY
+
+  build:
+    name: Build ${{ matrix.example }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build example
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: release-v5.4
+          target: esp32p4
+          path: examples/${{ matrix.example }}
+          command: idf.py build
