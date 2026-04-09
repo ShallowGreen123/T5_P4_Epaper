@@ -27,6 +27,7 @@
 - `pca9535`：IO 扩展芯片读取
 - `i2c_tools`：I2C 工具示例
 - `sgm38121`：电源相关芯片示例
+- `sd_card_test`：uSD 卡类型、容量、文件读写校验示例
 - `es8311_mic_speak` / `es8311_spiffs`：音频相关示例
 - `fastEPD_lvgl_demo` / `hdmi_video_renderer` / `hdmi_video_renderer_lvgl`：显示相关示例
 - `c6_wifi_scan`：通过板载 `ESP32-C6` 扫描 WiFi

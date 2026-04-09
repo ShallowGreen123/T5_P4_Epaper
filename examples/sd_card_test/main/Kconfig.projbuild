@@ -1,0 +1,70 @@
+menu "SD card test"
+
+    config SD_CARD_TEST_MOUNT_POINT
+        string "SD card mount point"
+        default "/sdcard"
+
+    config SD_CARD_TEST_FILE_NAME
+        string "Test file name"
+        default "sdtest.txt"
+        help
+            Keep the default 8.3-style name unless FATFS long filename support
+            is enabled. Long names may fail with EINVAL when CONFIG_FATFS_LFN_NONE
+            is selected.
+
+    config SD_CARD_TEST_FORMAT_ON_MOUNT_FAIL
+        bool "Format SD card if mounting fails"
+        default n
+        help
+            Enable only when you are comfortable erasing the card contents.
+
+    config SD_CARD_TEST_MAX_FREQ_KHZ
+        int "SDSPI max frequency in kHz"
+        default 20000
+        range 400 20000
+
+    config SD_CARD_TEST_PIN_MISO
+        int "SDSPI MISO GPIO"
+        default 44
+        range 0 54
+
+    config SD_CARD_TEST_PIN_MOSI
+        int "SDSPI MOSI GPIO"
+        default 46
+        range 0 54
+
+    config SD_CARD_TEST_PIN_CLK
+        int "SDSPI CLK GPIO"
+        default 45
+        range 0 54
+
+    config SD_CARD_TEST_PIN_CS
+        int "SDSPI CS GPIO"
+        default 47
+        range 0 54
+
+    config SD_CARD_TEST_SPEED_TEST
+        bool "Run read/write speed test"
+        default y
+
+    config SD_CARD_TEST_SPEED_FILE_NAME
+        string "Speed test file name"
+        default "sdbench.bin"
+        depends on SD_CARD_TEST_SPEED_TEST
+        help
+            Keep the default 8.3-style name unless FATFS long filename support
+            is enabled.
+
+    config SD_CARD_TEST_SPEED_SIZE_KB
+        int "Speed test size in KiB"
+        default 1024
+        range 4 32768
+        depends on SD_CARD_TEST_SPEED_TEST
+
+    config SD_CARD_TEST_SPEED_BLOCK_SIZE
+        int "Speed test block size in bytes"
+        default 16384
+        range 512 65536
+        depends on SD_CARD_TEST_SPEED_TEST
+
+endmenu
