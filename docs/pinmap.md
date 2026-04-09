@@ -128,3 +128,9 @@
 |AVDD2          |  CAM_2V8 | 摄像头电源引脚 |
 
 
+
+## HDMI DDC Note
+
+- `BOARD_HDMI_DDC_SDA` / `BOARD_HDMI_DDC_SCL` are the HDMI DDC bus on GPIO9 / GPIO10.
+- They are used to read monitor EDID data and are not the LT8912B configuration I2C bus.
+- LT8912B configuration I2C remains on GPIO7 / GPIO8.
