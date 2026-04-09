@@ -1,3 +1,10 @@
 idf_component_register(
-    SRCS "main.c" "app_stream_adapter.c" "app_extractor.c"
-    INCLUDE_DIRS ".")
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_lcd
+        esp_timer
+        t5_p4_board
+    PRIV_REQUIRES
+        esp_mm
+)

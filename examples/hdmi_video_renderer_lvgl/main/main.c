@@ -5,327 +5,327 @@
  */
 
 #include <inttypes.h>
-#include <string.h>
+#include <stdint.h>
+
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "esp_log.h"
+
+#include "esp_err.h"
 #include "esp_heap_caps.h"
-#include "esp_memory_utils.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_log.h"
 #include "esp_private/esp_cache_private.h"
-#include "esp_codec_dev.h"
-#include "esp_lcd_lt8912b.h"
-#include "driver/gpio.h"
+#include "esp_timer.h"
+
 #include "bsp/esp-bsp.h"
-#include "app_stream_adapter.h"
+#include "demos/lv_demos.h"
+#include "lvgl.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "main";
+static const char *TAG = "hdmi_lvgl";
 
-#ifdef CONFIG_BSP_LCD_TYPE_HDMI
-#define DISPLAY_OUTPUT_H_RES 800
-#define DISPLAY_OUTPUT_V_RES 600
-// #define DISPLAY_OUTPUT_H_RES 1280
-// #define DISPLAY_OUTPUT_V_RES 720
-#define DISPLAY_LANE_BITRATE_MBPS BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS
-#else
-#define DISPLAY_OUTPUT_H_RES BSP_LCD_H_RES
-#define DISPLAY_OUTPUT_V_RES BSP_LCD_V_RES
-#define DISPLAY_LANE_BITRATE_MBPS BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS
+#if !CONFIG_BSP_LCD_TYPE_HDMI
+#error "This example requires CONFIG_BSP_LCD_TYPE_HDMI=y"
 #endif
 
-#ifdef CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
-#define DISPLAY_BUFFER_SIZE (DISPLAY_OUTPUT_H_RES * DISPLAY_OUTPUT_V_RES * 3)
-#define BYTES_PER_PIXEL 3
-#else
-#define DISPLAY_BUFFER_SIZE (DISPLAY_OUTPUT_H_RES * DISPLAY_OUTPUT_V_RES * 2)
-#define BYTES_PER_PIXEL 2
+#if !CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
+#error "This example requires CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y"
 #endif
 
-#define MP4_FILENAME   BSP_SD_MOUNT_POINT "/" CONFIG_MP4_FILENAME
-#define ENABLE_LOOP_PLAYBACK    1
-#define ENABLE_AUDIO_PLAYBACK   0
-#define DISPLAY_FLUSH_TIMEOUT_MS 1000
-#define DISPLAY_BOOT_TEST_FRAME_DELAY_MS 500
+#define DISPLAY_OUTPUT_H_RES        BSP_LCD_H_RES
+#define DISPLAY_OUTPUT_V_RES        BSP_LCD_V_RES
+#define DISPLAY_LANE_BITRATE_MBPS   BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS
+#define DISPLAY_PIXEL_COUNT         ((uint32_t)(DISPLAY_OUTPUT_H_RES * DISPLAY_OUTPUT_V_RES))
+#define HDMI_RGB888_BYTES_PER_PIXEL 3U
+#define HDMI_RGB888_BUFFER_SIZE     ((size_t)DISPLAY_PIXEL_COUNT * HDMI_RGB888_BYTES_PER_PIXEL)
+#define DISPLAY_FLUSH_TIMEOUT_MS    1000
+#define LVGL_TICK_PERIOD_MS         1
+#define LVGL_TASK_MAX_DELAY_MS      10
 
-static esp_lcd_panel_handle_t lcd_panel;
-static esp_lcd_panel_io_handle_t lcd_io;
-static void *lcd_buffer[CONFIG_BSP_LCD_DPI_BUFFER_NUMS];
-static SemaphoreHandle_t trans_sem = NULL;
-static app_stream_adapter_handle_t stream_adapter;
-static esp_codec_dev_handle_t g_audio_dev = NULL;  // Global audio device handle
-static uint32_t s_display_submit_count = 0;
+static esp_lcd_panel_handle_t s_lcd_panel;
+static esp_lcd_panel_io_handle_t s_lcd_io;
+static SemaphoreHandle_t s_trans_done_sem;
+static lv_disp_draw_buf_t s_lvgl_draw_buf;
+static lv_color_t *s_lvgl_draw_buffer;
+static uint8_t *s_hdmi_flush_buffer;
+static esp_timer_handle_t s_lvgl_tick_timer;
+static uint32_t s_flush_count;
 
-static void play_media_file(const char *filename);
-static void fill_display_boot_test_frame(void *buffer, uint32_t width, uint32_t height);
-
-static IRAM_ATTR bool flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel_io, esp_lcd_dpi_panel_event_data_t *edata, void *user_ctx)
+static IRAM_ATTR bool flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel,
+                                                     esp_lcd_dpi_panel_event_data_t *edata,
+                                                     void *user_ctx)
 {
-    BaseType_t taskAwake = pdFALSE;
+    (void)panel;
+    (void)edata;
+    (void)user_ctx;
 
-    if (trans_sem) {
-        xSemaphoreGiveFromISR(trans_sem, &taskAwake);
+    BaseType_t task_awake = pdFALSE;
+    if (s_trans_done_sem) {
+        xSemaphoreGiveFromISR(s_trans_done_sem, &task_awake);
     }
-
-    return false;
+    return task_awake == pdTRUE;
 }
 
-static esp_err_t display_decoded_frame(uint8_t *buffer, uint32_t buffer_size,
-                                       uint32_t width, uint32_t height,
-                                       uint32_t buffer_index, void *user_data)
+static size_t get_psram_cache_line_size(void)
 {
-    // Clear any stale completion before submitting the next frame. The DPI driver can
-    // invoke on_color_trans_done synchronously from draw_bitmap(), so draining after the
-    // draw would consume the current frame's completion and deadlock on the next wait.
-    if (trans_sem) {
-        xSemaphoreTake(trans_sem, 0);
+    size_t cache_line_size = 0;
+    if (esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &cache_line_size) != ESP_OK || cache_line_size == 0) {
+        cache_line_size = 64;
     }
-
-    esp_err_t ret = esp_lcd_panel_draw_bitmap(lcd_panel, 0, 0, width, height, buffer);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to submit frame %" PRIu32 ": %s", buffer_index, esp_err_to_name(ret));
-        return ret;
-    }
-
-    if (trans_sem &&
-        xSemaphoreTake(trans_sem, pdMS_TO_TICKS(DISPLAY_FLUSH_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGW(TAG, "Display flush timeout on frame %" PRIu32 " (%" PRIu32 "x%" PRIu32 ")",
-                 buffer_index, width, height);
-    }
-
-    s_display_submit_count++;
-    if (buffer_index < 3 || (s_display_submit_count % 30) == 0) {
-        bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(lcd_panel);
-        ESP_LOGI(TAG, "Submitted frame %" PRIu32 " (%" PRIu32 "x%" PRIu32 "), LT8912 ready=%s, total=%" PRIu32,
-                 buffer_index, width, height, hdmi_ready ? "yes" : "no", s_display_submit_count);
-    }
-
-    return ESP_OK;
+    return cache_line_size;
 }
 
-static void fill_display_boot_test_frame(void *buffer, uint32_t width, uint32_t height)
+static void convert_lvgl_to_hdmi_rgb888(const lv_color_t *src,
+                                        uint32_t src_stride_px,
+                                        uint8_t *dst,
+                                        uint32_t width,
+                                        uint32_t height)
 {
-    if (buffer == NULL) {
+    for (uint32_t y = 0; y < height; ++y) {
+        const lv_color_t *src_row = src + (y * src_stride_px);
+        uint8_t *dst_row = dst + ((size_t)y * width * HDMI_RGB888_BYTES_PER_PIXEL);
+
+        for (uint32_t x = 0; x < width; ++x) {
+            const lv_color_t color = src_row[x];
+            const size_t dst_offset = (size_t)x * HDMI_RGB888_BYTES_PER_PIXEL;
+
+            /* The existing HDMI/JPEG path uses BGR byte order for RGB888 panel data. */
+            dst_row[dst_offset + 0] = LV_COLOR_GET_B(color);
+            dst_row[dst_offset + 1] = LV_COLOR_GET_G(color);
+            dst_row[dst_offset + 2] = LV_COLOR_GET_R(color);
+        }
+    }
+}
+
+static void lvgl_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
+{
+    const int32_t area_w = area->x2 - area->x1 + 1;
+    const int32_t area_h = area->y2 - area->y1 + 1;
+
+    int32_t x1 = area->x1;
+    int32_t y1 = area->y1;
+    int32_t x2 = area->x2;
+    int32_t y2 = area->y2;
+
+    if (x2 < 0 || y2 < 0 || x1 >= DISPLAY_OUTPUT_H_RES || y1 >= DISPLAY_OUTPUT_V_RES) {
+        lv_disp_flush_ready(disp_drv);
         return;
     }
 
-    uint8_t *pixels = (uint8_t *)buffer;
-    for (uint32_t y = 0; y < height; ++y) {
-        for (uint32_t x = 0; x < width; ++x) {
-            uint8_t shade = 0x10;
-            if (x < (width / 3)) {
-                shade = 0xFF;
-            } else if (x < ((width * 2) / 3)) {
-                shade = 0x88;
-            }
-
-            size_t offset = ((size_t)y * width + x) * BYTES_PER_PIXEL;
-            pixels[offset + 0] = shade;
-            pixels[offset + 1] = shade;
-            pixels[offset + 2] = shade;
-        }
+    if (x1 < 0) {
+        x1 = 0;
     }
+    if (y1 < 0) {
+        y1 = 0;
+    }
+    if (x2 >= DISPLAY_OUTPUT_H_RES) {
+        x2 = DISPLAY_OUTPUT_H_RES - 1;
+    }
+    if (y2 >= DISPLAY_OUTPUT_V_RES) {
+        y2 = DISPLAY_OUTPUT_V_RES - 1;
+    }
+
+    const uint32_t flush_w = (uint32_t)(x2 - x1 + 1);
+    const uint32_t flush_h = (uint32_t)(y2 - y1 + 1);
+    const uint32_t flush_px = flush_w * flush_h;
+
+    if (flush_px > DISPLAY_PIXEL_COUNT || s_hdmi_flush_buffer == NULL || s_lcd_panel == NULL) {
+        ESP_LOGE(TAG, "Invalid LVGL flush request: area=%" PRId32 "x%" PRId32 " buffer=%p panel=%p",
+                 area_w, area_h, s_hdmi_flush_buffer, s_lcd_panel);
+        lv_disp_flush_ready(disp_drv);
+        return;
+    }
+
+    const lv_color_t *src = color_p + ((y1 - area->y1) * area_w) + (x1 - area->x1);
+    convert_lvgl_to_hdmi_rgb888(src, (uint32_t)area_w, s_hdmi_flush_buffer, flush_w, flush_h);
+
+    if (s_trans_done_sem) {
+        xSemaphoreTake(s_trans_done_sem, 0);
+    }
+
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, x1, y1, x2 + 1, y2 + 1, s_hdmi_flush_buffer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to submit LVGL frame: %s", esp_err_to_name(ret));
+        lv_disp_flush_ready(disp_drv);
+        return;
+    }
+
+    if (s_trans_done_sem &&
+        xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DISPLAY_FLUSH_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "Display flush timeout (%" PRIu32 "x%" PRIu32 " at %" PRId32 ",%" PRId32 ")",
+                 flush_w, flush_h, x1, y1);
+    }
+
+    s_flush_count++;
+    if (s_flush_count <= 3 || (s_flush_count % 120) == 0) {
+        ESP_LOGI(TAG, "Flushed LVGL frame #%" PRIu32 " (%" PRIu32 "x%" PRIu32 ")",
+                 s_flush_count, flush_w, flush_h);
+    }
+
+    lv_disp_flush_ready(disp_drv);
 }
 
-void app_main()
+#if !LV_TICK_CUSTOM
+static void lvgl_tick_cb(void *arg)
 {
-    ESP_LOGI(TAG, "Starting HDMI MP4 Player application");
+    (void)arg;
+    lv_tick_inc(LVGL_TICK_PERIOD_MS);
+}
+#endif
 
-    // Initialize display
+static esp_err_t allocate_lvgl_buffers(void)
+{
+    const size_t cache_line_size = get_psram_cache_line_size();
+
+    s_lvgl_draw_buffer = heap_caps_aligned_calloc(cache_line_size,
+                                                  DISPLAY_PIXEL_COUNT,
+                                                  sizeof(lv_color_t),
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_lvgl_draw_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate LVGL draw buffer (%u pixels)", (unsigned)DISPLAY_PIXEL_COUNT);
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_hdmi_flush_buffer = heap_caps_aligned_calloc(cache_line_size,
+                                                  1,
+                                                  HDMI_RGB888_BUFFER_SIZE,
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_hdmi_flush_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate HDMI RGB888 flush buffer (%u bytes)",
+                 (unsigned)HDMI_RGB888_BUFFER_SIZE);
+        heap_caps_free(s_lvgl_draw_buffer);
+        s_lvgl_draw_buffer = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "Allocated LVGL draw buffer=%u bytes, HDMI flush buffer=%u bytes",
+             (unsigned)(DISPLAY_PIXEL_COUNT * sizeof(lv_color_t)),
+             (unsigned)HDMI_RGB888_BUFFER_SIZE);
+    return ESP_OK;
+}
+
+static esp_err_t init_hdmi_display(void)
+{
     bsp_display_config_t display_config = {
-        .hdmi_resolution = BSP_HDMI_RES_800x600,
-        // .hdmi_resolution = BSP_HDMI_RES_1280x720,
+        .hdmi_resolution = BSP_HDMI_DEFAULT_RESOLUTION,
         .dsi_bus = {
             .phy_clk_src = 0,
             .lane_bit_rate_mbps = DISPLAY_LANE_BITRATE_MBPS,
-        }
+        },
     };
 
     ESP_LOGI(TAG, "Display timing: %dx%d, DSI lane bitrate: %d Mbps",
              DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES, DISPLAY_LANE_BITRATE_MBPS);
 
-    esp_err_t ret = bsp_display_new(&display_config, &lcd_panel, &lcd_io);
+    esp_err_t ret = bsp_display_new(&display_config, &s_lcd_panel, &s_lcd_io);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize display: %s", esp_err_to_name(ret));
-        return;
+        ESP_LOGE(TAG, "Failed to initialize HDMI display: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    trans_sem = xSemaphoreCreateBinary();
-    if (trans_sem == NULL) {
+    s_trans_done_sem = xSemaphoreCreateBinary();
+    if (s_trans_done_sem == NULL) {
         ESP_LOGE(TAG, "Failed to create display flush semaphore");
-        return;
+        return ESP_ERR_NO_MEM;
     }
-    esp_lcd_dpi_panel_event_callbacks_t callbacks = {
+
+    const esp_lcd_dpi_panel_event_callbacks_t callbacks = {
         .on_color_trans_done = flush_dpi_panel_ready_callback,
     };
-    ESP_ERROR_CHECK(esp_lcd_dpi_panel_register_event_callbacks(lcd_panel, &callbacks, NULL));
-
-    size_t data_cache_line_size = 0;
-    ESP_ERROR_CHECK(esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &data_cache_line_size));
-    for (int i = 0; i < CONFIG_BSP_LCD_DPI_BUFFER_NUMS; i++) {
-        lcd_buffer[i] = heap_caps_aligned_calloc(data_cache_line_size, 1, DISPLAY_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (lcd_buffer[i] == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate buffer %d", i);
-            return;
-        }
-    }
-    ESP_LOGI(TAG, "Allocated %d external decode buffers (%u bytes each)",
-             CONFIG_BSP_LCD_DPI_BUFFER_NUMS, (unsigned)DISPLAY_BUFFER_SIZE);
-
-    fill_display_boot_test_frame(lcd_buffer[0], DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES);
-    ESP_LOGI(TAG, "Submitting boot diagnostic frame");
-    ret = display_decoded_frame((uint8_t *)lcd_buffer[0], DISPLAY_BUFFER_SIZE,
-                                DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES,
-                                0, NULL);
+    ret = esp_lcd_dpi_panel_register_event_callbacks(s_lcd_panel, &callbacks, NULL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to draw boot diagnostic frame: %s", esp_err_to_name(ret));
-        return;
-    }
-    vTaskDelay(pdMS_TO_TICKS(DISPLAY_BOOT_TEST_FRAME_DELAY_MS));
-
-    ret = bsp_sdcard_mount();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SD card");
-        return;
+        ESP_LOGE(TAG, "Failed to register DPI panel callbacks: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    esp_codec_dev_handle_t audio_dev = NULL;
-#if ENABLE_AUDIO_PLAYBACK
-    ESP_LOGI(TAG, "Initializing audio codec...");
-    audio_dev = bsp_audio_codec_speaker_init();
-    if (audio_dev == NULL) {
-        ESP_LOGW(TAG, "Failed to initialize audio codec, continuing without audio");
-        g_audio_dev = NULL;
-    } else {
-        ESP_LOGI(TAG, "Audio codec initialized successfully");
-        esp_codec_dev_set_out_vol(audio_dev, 60);
-        g_audio_dev = audio_dev;
-    }
-#else
-    ESP_LOGI(TAG, "Audio playback disabled, starting in video-only mode");
-    g_audio_dev = NULL;
-#endif
-
-    // Initialize stream adapter with unified configuration
-    ESP_LOGI(TAG, "Initializing stream adapter...");
-
-    // User data can be any context information needed by the callback
-    void *custom_user_data = NULL;  // Can be any struct pointer or data
-
-    app_stream_adapter_config_t adapter_config = {
-        .frame_cb = display_decoded_frame,
-        .user_data = custom_user_data,
-        .decode_buffers = lcd_buffer,
-        .buffer_count = CONFIG_BSP_LCD_DPI_BUFFER_NUMS,
-        .buffer_size = DISPLAY_BUFFER_SIZE,
-        .audio_dev = audio_dev,
-#ifdef CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
-        .jpeg_config = {
-            .output_format = APP_STREAM_JPEG_OUTPUT_RGB888,
-            .bgr_order = true,
-        },
-#else
-        .jpeg_config = APP_STREAM_JPEG_CONFIG_DEFAULT_RGB565(),
-#endif
-        .target_width = DISPLAY_OUTPUT_H_RES,
-        .target_height = DISPLAY_OUTPUT_V_RES,
-    };
-
-    ret = app_stream_adapter_init(&adapter_config, &stream_adapter);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize stream adapter: %d", ret);
-        if (audio_dev) {
-            esp_codec_dev_close(audio_dev);
-        }
-        return;
-    }
-
-    const char *format_str = (adapter_config.jpeg_config.output_format == APP_STREAM_JPEG_OUTPUT_RGB888) ? "RGB888" : "RGB565";
-    ESP_LOGI(TAG, "Stream adapter initialized with %s/%s at %dx%d%s",
-             format_str,
-             adapter_config.jpeg_config.bgr_order ? "BGR" : "RGB",
-             DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES,
-             audio_dev ? " and audio support" : " (video-only)");
-
-    FILE *fp = fopen(MP4_FILENAME, "rb");
-    if (fp) {
-        fclose(fp);
-
-        app_stream_adapter_set_file(stream_adapter, MP4_FILENAME, false);
-        play_media_file(MP4_FILENAME);
-    } else {
-        ESP_LOGW(TAG, "MP4 file not found: %s", MP4_FILENAME);
-    }
+    return ESP_OK;
 }
 
-static void play_media_file(const char *filename)
+static esp_err_t init_lvgl_port(void)
 {
-#if ENABLE_LOOP_PLAYBACK
-    ESP_LOGI(TAG, "Starting loop playback of %s", filename);
-#else
-    ESP_LOGI(TAG, "Playing %s", filename);
-#endif
+    lv_init();
+    esp_err_t ret = ESP_OK;
 
-    // Get stream info once
-    uint32_t width, height, fps, duration;
-    esp_err_t ret = app_stream_adapter_get_info(stream_adapter, &width, &height, &fps, &duration);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Media info: %"PRIu32"x%"PRIu32", %"PRIu32" fps, duration: %"PRIu32" ms",
-                 width, height, fps, duration);
-    }
-
-#if ENABLE_LOOP_PLAYBACK
-    uint32_t loop_count = 0;
-
-    // Continuous playback loop
-    while (1) {
-        ESP_LOGI(TAG, "Starting playback loop #%" PRIu32, ++loop_count);
-
-        // Start playback
-        ret = app_stream_adapter_start(stream_adapter);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to start playback: %d", ret);
-            break;
-        }
-
-        // Monitor playback with improved detection
-        uint32_t stable_count = 0;
-        uint32_t last_frames = 0;
-
-        while (1) {
-            app_stream_stats_t stats;
-            ret = app_stream_adapter_get_stats(stream_adapter, &stats);
-
-            if (ret == ESP_OK) {
-                if (stats.frames_processed == last_frames) {
-                    stable_count++;
-                    // If frame count hasn't changed for 3 consecutive checks, assume end
-                    if (stable_count >= 3) {
-                        ESP_LOGI(TAG, "Playback loop #%" PRIu32 " finished (%" PRIu32 " frames), restarting...",
-                                 loop_count, stats.frames_processed);
-                        break;
-                    }
-                } else {
-                    stable_count = 0;
-                    last_frames = stats.frames_processed;
-                }
-            } else {
-                ESP_LOGW(TAG, "Error getting stats, assuming playback ended");
-                break;
-            }
-
-            vTaskDelay(pdMS_TO_TICKS(500)); // Check every 500ms
-        }
-
-        // Stop and reset for next loop
-        app_stream_adapter_stop(stream_adapter);
-        vTaskDelay(pdMS_TO_TICKS(200)); // Brief pause
-        app_stream_adapter_set_file(stream_adapter, filename, false);
-    }
-#else
-    // Single playback mode
-    ret = app_stream_adapter_start(stream_adapter);
+#if !LV_TICK_CUSTOM
+    const esp_timer_create_args_t tick_timer_args = {
+        .callback = lvgl_tick_cb,
+        .name = "lvgl_tick",
+    };
+    ret = esp_timer_create(&tick_timer_args, &s_lvgl_tick_timer);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start playback: %d", ret);
+        ESP_LOGE(TAG, "Failed to create LVGL tick timer: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_timer_start_periodic(s_lvgl_tick_timer, LVGL_TICK_PERIOD_MS * 1000);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start LVGL tick timer: %s", esp_err_to_name(ret));
+        return ret;
     }
 #endif
+
+    ret = allocate_lvgl_buffers();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    lv_disp_draw_buf_init(&s_lvgl_draw_buf, s_lvgl_draw_buffer, NULL, DISPLAY_PIXEL_COUNT);
+
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = DISPLAY_OUTPUT_H_RES;
+    disp_drv.ver_res = DISPLAY_OUTPUT_V_RES;
+    disp_drv.flush_cb = lvgl_flush_cb;
+    disp_drv.draw_buf = &s_lvgl_draw_buf;
+    disp_drv.full_refresh = 1;
+    lv_disp_drv_register(&disp_drv);
+
+    return ESP_OK;
+}
+
+static void start_selected_demo(void)
+{
+#if CONFIG_HDMI_LVGL_DEMO_BENCHMARK
+    ESP_LOGI(TAG, "Starting LVGL Benchmark demo");
+    lv_demo_benchmark();
+#elif CONFIG_HDMI_LVGL_DEMO_STRESS
+    ESP_LOGI(TAG, "Starting LVGL Stress demo");
+    lv_demo_stress();
+#elif CONFIG_HDMI_LVGL_DEMO_WIDGETS
+    ESP_LOGI(TAG, "Starting LVGL Widgets demo");
+    lv_demo_widgets();
+#else
+#error "No HDMI LVGL demo selected"
+#endif
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Starting HDMI LVGL Demo Runner");
+    ESP_LOGI(TAG, "Free SPIRAM before init: %u bytes",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+    esp_err_t ret = init_hdmi_display();
+    if (ret != ESP_OK) {
+        return;
+    }
+
+    ret = init_lvgl_port();
+    if (ret != ESP_OK) {
+        return;
+    }
+
+    start_selected_demo();
+
+    while (true) {
+        uint32_t delay_ms = lv_timer_handler();
+        if (delay_ms == 0) {
+            delay_ms = 1;
+        } else if (delay_ms > LVGL_TASK_MAX_DELAY_MS) {
+            delay_ms = LVGL_TASK_MAX_DELAY_MS;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
 }
