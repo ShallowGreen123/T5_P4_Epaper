@@ -1,0 +1,11 @@
+## IDF Component Manager Manifest File
+version: '0.2.0'
+dependencies:
+  idf:
+    version: ">=5.4"
+  espressif/esp_tinyusb:
+    version: "^1.7.6~1"
+  espressif/esp_wifi_remote:
+    version: "^1.5.0"
+  espressif/esp_hosted:
+    version: "^2.12.3"
