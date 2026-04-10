@@ -1,0 +1,15 @@
+menu "Example Configuration"
+
+    choice DEVELOPMENT_BOARD_SELECTION
+        prompt "Select the development board you are using"
+        default ESP32_P4_T5_EPAPER if IDF_TARGET_ESP32P4
+        help
+            Select this option to choose the board for the example.
+
+        config ESP32_P4_T5_EPAPER
+            bool "LilyGo T5-P4 E-Paper"
+            depends on IDF_TARGET_ESP32P4
+
+    endchoice
+
+endmenu

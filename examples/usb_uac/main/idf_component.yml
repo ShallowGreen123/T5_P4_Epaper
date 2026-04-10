@@ -1,0 +1,13 @@
+## IDF Component Manager Manifest File
+version: "0.2.0"
+targets:
+  - esp32p4
+dependencies:
+  t5_p4_board:
+    rules:
+      - if: "target in [esp32p4]"
+    override_path: "../common_components/t5_p4_board"
+  idf: ">=5.1"
+  usb_device_uac:
+    version: "1.*"
+    override_path: "../common_components/usb_device_uac"
