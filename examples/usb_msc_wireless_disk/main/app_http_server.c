@@ -679,7 +679,7 @@ static esp_err_t download_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-#if defined (CONFIG_IDF_TARGET_ESP32S2) || defined (CONFIG_IDF_TARGET_ESP32S3)
+#if defined (CONFIG_IDF_TARGET_ESP32S2)
 // To generate a disconnect event
 static void usbd_vbus_enable(bool enable)
 {

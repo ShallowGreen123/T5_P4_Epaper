@@ -15,9 +15,6 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#ifdef CONFIG_ESP32_S3_USB_OTG
-#include "bsp/esp-bsp.h"
-#endif
 
 static const char *TAG = "usb_msc_wireless";
 
@@ -172,10 +169,6 @@ extern esp_err_t start_file_server(const char *base_path);
 
 void app_main(void)
 {
-#ifdef CONFIG_ESP32_S3_USB_OTG
-    bsp_usb_mode_select_device();
-#endif
-
     /* Initialize file storage */
     ESP_ERROR_CHECK(init_fat(&mount_card, disk_path));
     vTaskDelay(100 / portTICK_PERIOD_MS);
