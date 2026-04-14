@@ -1,0 +1,26 @@
+menu "EPUB Reader"
+
+config EPUB_READER_BOOK_DIR
+    string "Primary EPUB directory"
+    default "/sdcard/books"
+
+config EPUB_READER_FALLBACK_DIR
+    string "Fallback EPUB directory"
+    default "/sdcard"
+
+config EPUB_READER_ROTATION
+    int "Display rotation"
+    range 0 270
+    default 270
+
+config EPUB_READER_TOUCH_POLL_MS
+    int "Touch poll interval (ms)"
+    range 10 1000
+    default 50
+
+config EPUB_READER_TASK_STACK_SIZE
+    int "Reader task stack size (bytes)"
+    range 16384 131072
+    default 65536
+
+endmenu
