@@ -23,4 +23,34 @@ config EPUB_READER_TASK_STACK_SIZE
     range 16384 131072
     default 65536
 
+config EPUB_READER_BODY_LINE_GAP
+    int "Extra body line gap (px)"
+    range 0 16
+    default 2
+
+config EPUB_READER_PARAGRAPH_GAP
+    int "Paragraph gap (px)"
+    range 0 32
+    default 6
+
+config EPUB_READER_SPACE_WIDTH_PERCENT
+    int "Word space width percent"
+    range 0 150
+    default 0
+
+config EPUB_READER_INTER_WORD_TIGHTEN_PX
+    int "Inter-word tighten overlap (px)"
+    range 0 8
+    default 2
+
+config EPUB_READER_JUSTIFY_MAX_SPACE_PERCENT
+    int "Maximum justified word space percent"
+    range 0 250
+    default 20
+
+config EPUB_READER_ENGLISH_FIRST_LINE_INDENT
+    int "English first line indent (px)"
+    range 0 80
+    default 28
+
 endmenu

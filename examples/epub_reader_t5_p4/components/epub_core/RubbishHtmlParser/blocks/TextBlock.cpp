@@ -1,7 +1,9 @@
 #include <string.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <limits.h>
 #include <vector>
+#include "sdkconfig.h"
 #include "TextBlock.h"
 #ifndef UNIT_TEST
 #include <esp_log.h>
@@ -16,6 +18,11 @@
 static bool is_whitespace(char c)
 {
   return (c == ' ' || c == '\r' || c == '\n');
+}
+
+static bool is_ascii_letter(unsigned char c)
+{
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
 // move past anything that should be considered part of a work
@@ -66,10 +73,28 @@ void TextBlock::add_span(const char *span, bool is_bold, bool is_italic)
       word_styles.push_back((is_bold ? BOLD_SPAN : 0) | (is_italic ? ITALIC_SPAN : 0));
     }
   }
+
+  for (int i = 0; i < length; ++i)
+  {
+    const unsigned char c = static_cast<unsigned char>(span[i]);
+    if (is_ascii_letter(c))
+    {
+      ascii_letter_count++;
+    }
+    else if (c >= 0x80)
+    {
+      non_ascii_byte_count++;
+    }
+  }
 }
 // given a renderer works out where to break the words into lines
 void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
 {
+  (void)epub;
+  word_widths.clear();
+  word_xpos.clear();
+  line_breaks.clear();
+
   // measure each word
   for (int i = 0; i < words.size(); i++)
   {
@@ -80,6 +105,10 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
 
   int page_width = max_width != -1 ? max_width : renderer->get_page_width();
   int space_width = renderer->get_space_width();
+  const float max_justified_spacing = (space_width * CONFIG_EPUB_READER_JUSTIFY_MAX_SPACE_PERCENT) / 100.0f;
+  const bool is_english_like = ascii_letter_count >= 4 && ascii_letter_count >= (non_ascii_byte_count * 2);
+  const int first_line_indent =
+      (first_line_indent_enabled && is_english_like) ? CONFIG_EPUB_READER_ENGLISH_FIRST_LINE_INDENT : 0;
 
   // now apply the dynamic programming algorithm to find the best line breaks
   int n = word_widths.size();
@@ -102,7 +131,8 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
   // Make each word first word of line by iterating over each index in arr.
   for (int i = n - 2; i >= 0; i--)
   {
-    int currlen = -1;
+    const int available_width = (i == 0) ? std::max(1, page_width - first_line_indent) : page_width;
+    int currlen = 0;
     dp[i] = INT_MAX;
 
     // Variable to store possible minimum cost of line.
@@ -111,11 +141,14 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
     // Keep on adding words in current line by iterating from starting word upto last word in arr.
     for (int j = i; j < n; j++)
     {
-      // Update the width of the words in current line + the space between two words.
-      currlen += (word_widths[j] + space_width);
+      if (j > i)
+      {
+        currlen += space_width;
+      }
+      currlen += word_widths[j];
 
       // If we're bigger than the current pagewidth then we can't add more words
-      if (currlen > page_width)
+      if (currlen > available_width)
         break;
 
       // if we've run out of words then this is last line and the cost should be 0
@@ -123,7 +156,7 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
       if (j == n - 1)
         cost = 0;
       else
-        cost = (page_width - currlen) * (page_width - currlen) + dp[j + 1];
+        cost = (available_width - currlen) * (available_width - currlen) + dp[j + 1];
 
       // Check if this arrangement gives minimum cost for line starting with word words[i].
       if (cost < dp[i])
@@ -132,12 +165,26 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
         ans[i] = j;
       }
     }
+
+    if (dp[i] == INT_MAX)
+    {
+      dp[i] = (i == n - 1) ? 0 : dp[i + 1];
+      ans[i] = i;
+    }
   }
   // We can now iterate through the answer to find the line break positions
   size_t i = 0;
   while (i < n)
   {
-    i = ans[i] + 1;
+    const size_t next_break = ans[i] + 1;
+    if (next_break <= i || next_break > static_cast<size_t>(n))
+    {
+      line_breaks.push_back(i + 1);
+      i = i + 1;
+      continue;
+    }
+
+    i = next_break;
     if (i > n)
     {
       ESP_LOGI("TextBlock", "fallen off the end of the words");
@@ -164,34 +211,38 @@ void TextBlock::layout(Renderer *renderer, Epub *epub, int max_width)
   }
   // With the page breaks calculated we can now position the words along the line
   int start_word = 0;
+  word_xpos.resize(words.size());
   for (int i = 0; i < line_breaks.size(); i++)
   {
+    const int line_indent = (i == 0) ? first_line_indent : 0;
+    const int available_width = page_width - line_indent;
     int total_word_width = 0;
     for (int word_index = start_word; word_index < line_breaks[i]; word_index++)
     {
       total_word_width += word_widths[word_index];
     }
-    float spare_space = page_width - total_word_width;
-    float actual_spacing = space_width;
     int number_words = line_breaks[i] - start_word;
+    const float line_width = total_word_width + std::max(0, number_words - 1) * static_cast<float>(space_width);
+    float spare_space = available_width - line_width;
+    float actual_spacing = static_cast<float>(space_width);
     // don't add space if we are on the last line and we are not justified text
     if (i != line_breaks.size() - 1 && style == JUSTIFIED)
     {
-      if (line_breaks[i] - start_word > 1)
+      if (number_words > 1)
       {
-        actual_spacing = spare_space / float(number_words - 1);
+        actual_spacing = std::min((available_width - total_word_width) / float(number_words - 1), max_justified_spacing);
+        spare_space = available_width - (total_word_width + (number_words - 1) * actual_spacing);
       }
     }
-    float xpos = 0;
+    float xpos = static_cast<float>(line_indent);
     if (style == RIGHT_ALIGN)
     {
-      xpos = spare_space - (number_words - 1) * space_width;
+      xpos = line_indent + std::max(0.0f, spare_space);
     }
     if (style == CENTER_ALIGN)
     {
-      xpos = (spare_space - (number_words - 1) * space_width) / 2;
+      xpos = line_indent + std::max(0.0f, spare_space) / 2;
     }
-    word_xpos.resize(words.size());
     for (int word_index = start_word; word_index < line_breaks[i]; word_index++)
     {
       word_xpos[word_index] = xpos;

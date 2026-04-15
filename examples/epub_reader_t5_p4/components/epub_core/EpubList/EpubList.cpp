@@ -1,4 +1,6 @@
 #include "EpubList.h"
+#include <cctype>
+#include <cstring>
 
 #ifndef UNIT_TEST
   #include <esp_log.h>
@@ -13,6 +15,46 @@ static const char *TAG = "PUBLIST";
 
 #define PADDING 20
 #define EPUBS_PER_PAGE 5
+
+namespace {
+
+void copy_string_safely(char *destination, size_t destination_size, const char *source)
+{
+  if (!destination || destination_size == 0)
+  {
+    return;
+  }
+
+  destination[0] = '\0';
+  if (!source)
+  {
+    return;
+  }
+
+  strncpy(destination, source, destination_size - 1);
+  destination[destination_size - 1] = '\0';
+}
+
+bool has_epub_extension(const char *filename)
+{
+  if (!filename)
+  {
+    return false;
+  }
+
+  const size_t length = strlen(filename);
+  if (length < 5)
+  {
+    return false;
+  }
+
+  std::string extension(filename + length - 5);
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return extension == ".epub";
+}
+
+}  // namespace
 
 void EpubList::next()
 {
@@ -62,7 +104,7 @@ bool EpubList::load(const char *path)
         continue;
       }
       int name_length = strlen(ent->d_name);
-      if (name_length < 5 || strcmp(ent->d_name + name_length - 5, ".epub") != 0)
+      if (name_length < 5 || !has_epub_extension(ent->d_name))
       {
         continue;
       }
@@ -70,8 +112,10 @@ bool EpubList::load(const char *path)
       Epub *epub = new Epub(base_path + ent->d_name);
       if (epub->load())
       {
-        strncpy(state.epub_list[state.num_epubs].path, epub->get_path().c_str(), MAX_PATH_SIZE);
-        strncpy(state.epub_list[state.num_epubs].title, replace_html_entities(epub->get_title()).c_str(), MAX_TITLE_SIZE);
+        const std::string title = replace_html_entities(epub->get_title());
+        copy_string_safely(state.epub_list[state.num_epubs].path, MAX_PATH_SIZE, epub->get_path().c_str());
+        copy_string_safely(state.epub_list[state.num_epubs].title, MAX_TITLE_SIZE, title.c_str());
+        ESP_LOGI(TAG, "Loaded book: %s", state.epub_list[state.num_epubs].title);
         state.num_epubs++;
         if (state.num_epubs == MAX_EPUB_LIST_SIZE)
         {

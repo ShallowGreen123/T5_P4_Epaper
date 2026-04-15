@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "sdkconfig.h"
+
 #include "../../fastEPD_lvgl_demo/components/fastepd/Fonts/Lora_24.h"
 #include "../../fastEPD_lvgl_demo/components/fastepd/Fonts/Roboto_Black_24.h"
 
@@ -37,7 +39,7 @@ T5EpubRenderer::FontMetrics T5EpubRenderer::measure_font(FASTEPD &display, const
     FontMetrics metrics = {};
     metrics.font = font;
     metrics.baseline = std::max(0, -rect.y);
-    metrics.line_height = std::max(28, rect.h + 6);
+    metrics.line_height = std::max(24, rect.h + CONFIG_EPUB_READER_BODY_LINE_GAP);
     return metrics;
 }
 
@@ -279,7 +281,15 @@ int T5EpubRenderer::get_page_height()
 
 int T5EpubRenderer::get_space_width()
 {
-    return get_text_width(" ", false, false);
+    const int base_space_width = get_text_width(" ", false, false);
+    if (base_space_width <= 0) {
+        return 0;
+    }
+
+    const int configured_space = (base_space_width * CONFIG_EPUB_READER_SPACE_WIDTH_PERCENT) / 100;
+    const int tightened_space = configured_space - CONFIG_EPUB_READER_INTER_WORD_TIGHTEN_PX;
+    const int min_space = -std::max(1, base_space_width / 2);
+    return std::max(min_space, tightened_space);
 }
 
 int T5EpubRenderer::get_line_height()

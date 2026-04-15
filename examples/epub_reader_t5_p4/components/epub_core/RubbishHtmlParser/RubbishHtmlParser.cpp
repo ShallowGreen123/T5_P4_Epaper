@@ -13,6 +13,7 @@
 #include <list>
 #include <vector>
 #include <exception>
+#include "sdkconfig.h"
 #include "../ZipFile/ZipFile.h"
 #include "../Renderer/Renderer.h"
 #include "htmlEntities.h"
@@ -92,7 +93,7 @@ bool RubbishHtmlParser::VisitEnter(const tinyxml2::XMLElement &element, const ti
       }
       blocks.push_back(new ImageBlock(m_base_path + src));
       // start a new text block - with the same style as before
-      startNewTextBlock(style);
+      startNewTextBlock(style, false);
     }
     else
     {
@@ -106,17 +107,18 @@ bool RubbishHtmlParser::VisitEnter(const tinyxml2::XMLElement &element, const ti
   else if (matches(tag_name, HEADER_TAGS, NUM_HEADER_TAGS))
   {
     is_bold = true;
-    startNewTextBlock(CENTER_ALIGN);
+    startNewTextBlock(LEFT_ALIGN, false);
   }
   else if (matches(tag_name, BLOCK_TAGS, NUM_BLOCK_TAGS))
   {
     if (strcmp(tag_name, "br") == 0)
     {
-      startNewTextBlock(currentTextBlock->get_style());
+      startNewTextBlock(currentTextBlock->get_style(), false);
     }
     else
     {
-      startNewTextBlock(JUSTIFIED);
+      const bool indent_first_line = strcmp(tag_name, "li") != 0;
+      startNewTextBlock(LEFT_ALIGN, indent_first_line);
     }
   }
   else if (matches(tag_name, BOLD_TAGS, NUM_BOLD_TAGS))
@@ -158,7 +160,7 @@ bool RubbishHtmlParser::VisitExit(const tinyxml2::XMLElement &element)
 }
 
 // start a new text block if needed
-void RubbishHtmlParser::startNewTextBlock(BLOCK_STYLE style)
+void RubbishHtmlParser::startNewTextBlock(BLOCK_STYLE style, bool indent_first_line)
 {
   if (currentTextBlock)
   {
@@ -166,6 +168,7 @@ void RubbishHtmlParser::startNewTextBlock(BLOCK_STYLE style)
     if (currentTextBlock->is_empty())
     {
       currentTextBlock->set_style(style);
+      currentTextBlock->set_first_line_indent_enabled(indent_first_line);
       return;
     }
     else
@@ -174,12 +177,13 @@ void RubbishHtmlParser::startNewTextBlock(BLOCK_STYLE style)
     }
   }
   currentTextBlock = new TextBlock(style);
+  currentTextBlock->set_first_line_indent_enabled(indent_first_line);
   blocks.push_back(currentTextBlock);
 }
 
 void RubbishHtmlParser::parse(const char *html, int length)
 {
-  startNewTextBlock(JUSTIFIED);
+  startNewTextBlock(LEFT_ALIGN, false);
   tinyxml2::XMLDocument doc(false, tinyxml2::COLLAPSE_WHITESPACE);
   doc.Parse(html, length);
   doc.Accept(this);
@@ -228,7 +232,7 @@ void RubbishHtmlParser::layout(Renderer *renderer, Epub *epub)
         y += line_height;
       }
       // add some extra line between blocks
-      y += line_height * 0.5;
+      y += CONFIG_EPUB_READER_PARAGRAPH_GAP;
     }
     if (block->getType() == BlockType::IMAGE_BLOCK)
     {

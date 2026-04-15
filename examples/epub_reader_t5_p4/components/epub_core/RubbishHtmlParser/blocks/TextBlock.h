@@ -32,6 +32,11 @@ private:
   std::vector<uint16_t> word_xpos;
   // the styles of each word
   std::vector<uint8_t> word_styles;
+  // whether this block should indent its first line
+  bool first_line_indent_enabled = false;
+  // rough language signal for English-first layout tweaks
+  int ascii_letter_count = 0;
+  int non_ascii_byte_count = 0;
 
   // the style of the block - left, center, right aligned
   BLOCK_STYLE style;
@@ -54,6 +59,14 @@ public:
   void set_style(BLOCK_STYLE style)
   {
     this->style = style;
+  }
+  void set_first_line_indent_enabled(bool enabled)
+  {
+    first_line_indent_enabled = enabled;
+  }
+  bool is_first_line_indent_enabled() const
+  {
+    return first_line_indent_enabled;
   }
   BLOCK_STYLE get_style()
   {

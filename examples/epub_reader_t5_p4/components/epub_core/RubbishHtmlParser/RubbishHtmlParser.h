@@ -27,7 +27,7 @@ private:
   std::string m_base_path;
 
   // start a new text block if needed
-  void startNewTextBlock(BLOCK_STYLE style);
+  void startNewTextBlock(BLOCK_STYLE style, bool indent_first_line = false);
 
 public:
   RubbishHtmlParser(const char *html, int length, const std::string &base_path);
