@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "driver/i2c_master.h"
 #endif
 
 #define BB_PANEL_FLAG_NONE     0x00
@@ -143,6 +144,11 @@ enum {
 };
 #define BBEP_BLACK 0
 #define BBEP_WHITE 1
+
+#ifndef ARDUINO
+void bbepSetI2CMasterBus(i2c_master_bus_handle_t bus_handle);
+#endif
+
 // Row step options
 enum {
     ROW_START = 0,

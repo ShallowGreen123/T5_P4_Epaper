@@ -5,7 +5,7 @@ if(NOT DEFINED IDF_TARGET)
 endif()
 
 list(APPEND EXTRA_COMPONENT_DIRS
-    "${CMAKE_CURRENT_LIST_DIR}/../fastEPD_lvgl_demo/components/fastepd"
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/fastepd"
     "${CMAKE_CURRENT_LIST_DIR}/../fastEPD_lvgl_demo/components/lvgl"
     "${CMAKE_CURRENT_LIST_DIR}/../../components/bq25896"
     "${CMAKE_CURRENT_LIST_DIR}/../../components/bq27220"

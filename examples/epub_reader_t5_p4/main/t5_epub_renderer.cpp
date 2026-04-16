@@ -4,8 +4,8 @@
 
 #include "sdkconfig.h"
 
-#include "../../fastEPD_lvgl_demo/components/fastepd/Fonts/Lora_24.h"
-#include "../../fastEPD_lvgl_demo/components/fastepd/Fonts/Roboto_Black_24.h"
+#include "../../../components/fastepd/Fonts/Lora_24.h"
+#include "../../../components/fastepd/Fonts/Roboto_Black_24.h"
 
 namespace {
 
