@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/bq25896.cpp"
+        "src/bq25896_hal.cpp"
+        "src/bq25896_hal_esp_idf.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_driver_i2c
+        esp_rom
+)
