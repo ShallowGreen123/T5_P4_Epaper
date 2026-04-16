@@ -58,6 +58,7 @@ enum : size_t
     BQ25896_LINE_VREG_MV,
     BQ25896_LINE_ICHG_MA,
     BQ25896_LINE_PRE_MA,
+    BQ25896_LINE_ITERM_MA,
     BQ25896_LINE_CHG_ADC_MA,
     BQ25896_LINE_STATUS,
     BQ25896_LINE_COUNT
@@ -72,6 +73,8 @@ enum : size_t
     BQ27220_LINE_TEMP,
     BQ27220_LINE_AVG_I,
     BQ27220_LINE_VOLT,
+    BQ27220_LINE_CHARGE_VOLTAGE,
+    BQ27220_LINE_TAPER_CURRENT,
     BQ27220_LINE_FULL,
     BQ27220_LINE_REM_FULL,
     BQ27220_LINE_COUNT
@@ -201,8 +204,8 @@ static void set_label_text_if_changed(lv_obj_t *label, const char *text)
     }
 }
 
-static void set_row_placeholder(const std::array<lv_obj_t *, BQ25896_LINE_COUNT> &labels,
-                                const char *placeholder)
+static void set_bq25896_placeholder(const std::array<lv_obj_t *, BQ25896_LINE_COUNT> &labels,
+                                    const char *placeholder)
 {
     char line[48];
 
@@ -221,14 +224,16 @@ static void set_row_placeholder(const std::array<lv_obj_t *, BQ25896_LINE_COUNT>
     set_label_text_if_changed(labels[BQ25896_LINE_ICHG_MA], line);
     std::snprintf(line, sizeof(line), "PRE mA   : %s", placeholder);
     set_label_text_if_changed(labels[BQ25896_LINE_PRE_MA], line);
+    std::snprintf(line, sizeof(line), "ITerm mA : %s", placeholder);
+    set_label_text_if_changed(labels[BQ25896_LINE_ITERM_MA], line);
     std::snprintf(line, sizeof(line), "CHG ADC  : %s", placeholder);
     set_label_text_if_changed(labels[BQ25896_LINE_CHG_ADC_MA], line);
     std::snprintf(line, sizeof(line), "Status   : %s", placeholder);
     set_label_text_if_changed(labels[BQ25896_LINE_STATUS], line);
 }
 
-static void set_row_placeholder(const std::array<lv_obj_t *, BQ27220_LINE_COUNT> &labels,
-                                const char *placeholder)
+static void set_bq27220_placeholder(const std::array<lv_obj_t *, BQ27220_LINE_COUNT> &labels,
+                                    const char *placeholder)
 {
     char line[48];
 
@@ -245,6 +250,10 @@ static void set_row_placeholder(const std::array<lv_obj_t *, BQ27220_LINE_COUNT>
     set_label_text_if_changed(labels[BQ27220_LINE_AVG_I], line);
     std::snprintf(line, sizeof(line), "Volt     : %s", placeholder);
     set_label_text_if_changed(labels[BQ27220_LINE_VOLT], line);
+    std::snprintf(line, sizeof(line), "ChargeV  : %s", placeholder);
+    set_label_text_if_changed(labels[BQ27220_LINE_CHARGE_VOLTAGE], line);
+    std::snprintf(line, sizeof(line), "TaperCur : %s", placeholder);
+    set_label_text_if_changed(labels[BQ27220_LINE_TAPER_CURRENT], line);
     std::snprintf(line, sizeof(line), "Full?    : %s", placeholder);
     set_label_text_if_changed(labels[BQ27220_LINE_FULL], line);
     std::snprintf(line, sizeof(line), "Rem/Full : %s", placeholder);
@@ -311,8 +320,8 @@ static void create_dashboard_ui()
     lv_obj_set_style_text_font(s_ui.bq25896_labels[BQ25896_LINE_TITLE], LV_FONT_DEFAULT, 0);
     lv_obj_set_style_text_font(s_ui.bq27220_labels[BQ27220_LINE_TITLE], LV_FONT_DEFAULT, 0);
 
-    set_row_placeholder(s_ui.bq25896_labels, "INIT");
-    set_row_placeholder(s_ui.bq27220_labels, "INIT");
+    set_bq25896_placeholder(s_ui.bq25896_labels, "INIT");
+    set_bq27220_placeholder(s_ui.bq27220_labels, "INIT");
 
     lv_scr_load(s_ui.screen);
 }
@@ -627,13 +636,13 @@ static void update_bq25896_ui(const Bq25896Snapshot &snapshot)
 
     if (!snapshot.initialized)
     {
-        set_row_placeholder(s_ui.bq25896_labels, "NOT FOUND");
+        set_bq25896_placeholder(s_ui.bq25896_labels, "NOT FOUND");
         return;
     }
 
     if (!snapshot.read_ok)
     {
-        set_row_placeholder(s_ui.bq25896_labels, "READ ERR");
+        set_bq25896_placeholder(s_ui.bq25896_labels, "READ ERR");
         return;
     }
 
@@ -651,6 +660,8 @@ static void update_bq25896_ui(const Bq25896Snapshot &snapshot)
     set_label_text_if_changed(s_ui.bq25896_labels[BQ25896_LINE_ICHG_MA], line);
     std::snprintf(line, sizeof(line), "PRE mA   : %u", snapshot.cfg.precharge_current_ma);
     set_label_text_if_changed(s_ui.bq25896_labels[BQ25896_LINE_PRE_MA], line);
+    std::snprintf(line, sizeof(line), "ITerm mA : %u", snapshot.cfg.termination_current_ma);
+    set_label_text_if_changed(s_ui.bq25896_labels[BQ25896_LINE_ITERM_MA], line);
     std::snprintf(line, sizeof(line), "CHG ADC  : %u", snapshot.adc.charge_current_ma);
     set_label_text_if_changed(s_ui.bq25896_labels[BQ25896_LINE_CHG_ADC_MA], line);
 
@@ -683,13 +694,13 @@ static void update_bq27220_ui(const Bq27220PanelData &snapshot)
 
     if (!snapshot.initialized)
     {
-        set_row_placeholder(s_ui.bq27220_labels, "NOT FOUND");
+        set_bq27220_placeholder(s_ui.bq27220_labels, "NOT FOUND");
         return;
     }
 
     if (!snapshot.read_ok)
     {
-        set_row_placeholder(s_ui.bq27220_labels, "READ ERR");
+        set_bq27220_placeholder(s_ui.bq27220_labels, "READ ERR");
         return;
     }
 
@@ -708,6 +719,10 @@ static void update_bq27220_ui(const Bq27220PanelData &snapshot)
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_AVG_I], line);
     std::snprintf(line, sizeof(line), "Volt     : %u mV", snapshot.gauge.voltage_mv);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_VOLT], line);
+    std::snprintf(line, sizeof(line), "ChargeV  : %u mV", RECOVER_VREG_MV);
+    set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_CHARGE_VOLTAGE], line);
+    std::snprintf(line, sizeof(line), "TaperCur : %u mA", RECOVER_ITERM_MA);
+    set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_TAPER_CURRENT], line);
     std::snprintf(line, sizeof(line), "Full?    : %s", snapshot.gauge.full ? "YES" : "NO");
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_FULL], line);
     std::snprintf(line, sizeof(line), "Rem/Full : %u / %u mAh",
