@@ -173,6 +173,28 @@ typedef struct
 } bq25896_adc_t;
 
 /**
+ * @brief Decoded programmable charge configuration.
+ */
+typedef struct
+{
+    uint8_t raw_reg00;             /**< Raw REG00 value. */
+    uint8_t raw_reg03;             /**< Raw REG03 value. */
+    uint8_t raw_reg04;             /**< Raw REG04 value. */
+    uint8_t raw_reg05;             /**< Raw REG05 value. */
+    uint8_t raw_reg06;             /**< Raw REG06 value. */
+    uint8_t raw_reg09;             /**< Raw REG09 value. */
+    bool charge_enabled;           /**< REG03.CHG_CONFIG. */
+    bool otg_enabled;              /**< REG03.OTG_CONFIG. */
+    bool hiz_enabled;              /**< REG00.EN_HIZ. */
+    bool batfet_disabled;          /**< REG09.BATFET_DIS. */
+    uint16_t sys_min_voltage_mv;   /**< REG03.SYS_MIN decoded in mV. */
+    uint16_t charge_voltage_mv;    /**< REG06.VREG decoded in mV. */
+    uint16_t charge_current_ma;    /**< REG04.ICHG decoded in mA. */
+    uint16_t precharge_current_ma; /**< REG05.IPRECHG decoded in mA. */
+    uint16_t termination_current_ma; /**< REG05.ITERM decoded in mA. */
+} bq25896_charge_config_t;
+
+/**
  * @brief Fill a config structure with safe defaults.
  *
  * @param config Output configuration pointer.
@@ -239,6 +261,26 @@ bq25896_err_t bq25896_set_input_limit_ma(bq25896_t *dev, uint16_t input_limit_ma
 bq25896_err_t bq25896_set_charge_current_ma(bq25896_t *dev, uint16_t charge_current_ma);
 
 /**
+ * @brief Program REG05.IPRECHG in milliamps.
+ *
+ * @param dev Driver instance.
+ * @param precharge_current_ma Requested precharge current in mA.
+ *
+ * @return `BQ25896_OK`, `BQ25896_WARN_CLAMPED`, or a negative error code.
+ */
+bq25896_err_t bq25896_set_precharge_current_ma(bq25896_t *dev, uint16_t precharge_current_ma);
+
+/**
+ * @brief Program REG05.ITERM in milliamps.
+ *
+ * @param dev Driver instance.
+ * @param termination_current_ma Requested termination current in mA.
+ *
+ * @return `BQ25896_OK`, `BQ25896_WARN_CLAMPED`, or a negative error code.
+ */
+bq25896_err_t bq25896_set_termination_current_ma(bq25896_t *dev, uint16_t termination_current_ma);
+
+/**
  * @brief Program REG06.VREG in millivolts.
  *
  * @param dev Driver instance.
@@ -247,6 +289,16 @@ bq25896_err_t bq25896_set_charge_current_ma(bq25896_t *dev, uint16_t charge_curr
  * @return `BQ25896_OK`, `BQ25896_WARN_CLAMPED`, or a negative error code.
  */
 bq25896_err_t bq25896_set_charge_voltage_mv(bq25896_t *dev, uint16_t charge_voltage_mv);
+
+/**
+ * @brief Program REG03.SYS_MIN in millivolts.
+ *
+ * @param dev Driver instance.
+ * @param sys_min_voltage_mv Requested minimum system voltage in mV.
+ *
+ * @return `BQ25896_OK`, `BQ25896_WARN_CLAMPED`, or a negative error code.
+ */
+bq25896_err_t bq25896_set_system_min_voltage_mv(bq25896_t *dev, uint16_t sys_min_voltage_mv);
 
 /**
  * @brief Enable OTG boost mode.
@@ -265,6 +317,17 @@ bq25896_err_t bq25896_enable_otg(bq25896_t *dev);
  * @return `BQ25896_OK` on success, otherwise a negative error code.
  */
 bq25896_err_t bq25896_disable_otg(bq25896_t *dev);
+
+/**
+ * @brief Restore the normal battery power path.
+ *
+ * This helper clears BATFET disable and HIZ mode without changing OTG state.
+ *
+ * @param dev Driver instance.
+ *
+ * @return `BQ25896_OK` on success, otherwise a negative error code.
+ */
+bq25896_err_t bq25896_enable_battery_power_path(bq25896_t *dev);
 
 /**
  * @brief Program REG0A.BOOSTV in millivolts.
@@ -327,6 +390,16 @@ bq25896_err_t bq25896_read_fault(const bq25896_t *dev, bq25896_fault_t *fault);
  * @return `BQ25896_OK` on success, otherwise a negative error code.
  */
 bq25896_err_t bq25896_read_adc(const bq25896_t *dev, bq25896_adc_t *adc);
+
+/**
+ * @brief Read and decode the programmable charge configuration.
+ *
+ * @param dev Driver instance.
+ * @param cfg Output structure.
+ *
+ * @return `BQ25896_OK` on success, otherwise a negative error code.
+ */
+bq25896_err_t bq25896_read_charge_config(const bq25896_t *dev, bq25896_charge_config_t *cfg);
 
 #ifdef __cplusplus
 }

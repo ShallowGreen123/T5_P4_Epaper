@@ -244,6 +244,24 @@ extern "C" {
 #define BQ25896_ICHG_OFFSET_MA                  0u
 #define BQ25896_ICHG_RAW_MAX                    0x2Fu
 
+#define BQ25896_IPRECHG_MIN_MA                  64u
+#define BQ25896_IPRECHG_MAX_MA                  1024u
+#define BQ25896_IPRECHG_STEP_MA                 64u
+#define BQ25896_IPRECHG_OFFSET_MA               64u
+#define BQ25896_IPRECHG_RAW_MAX                 0x0Fu
+
+#define BQ25896_ITERM_MIN_MA                    64u
+#define BQ25896_ITERM_MAX_MA                    1024u
+#define BQ25896_ITERM_STEP_MA                   64u
+#define BQ25896_ITERM_OFFSET_MA                 64u
+#define BQ25896_ITERM_RAW_MAX                   0x0Fu
+
+#define BQ25896_SYS_MIN_MIN_MV                  3000u
+#define BQ25896_SYS_MIN_MAX_MV                  3700u
+#define BQ25896_SYS_MIN_STEP_MV                 100u
+#define BQ25896_SYS_MIN_OFFSET_MV               3000u
+#define BQ25896_SYS_MIN_RAW_MAX                 0x07u
+
 #define BQ25896_VREG_MIN_MV                     3840u
 #define BQ25896_VREG_MAX_MV                     4608u
 #define BQ25896_VREG_STEP_MV                    16u

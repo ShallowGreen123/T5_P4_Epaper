@@ -473,6 +473,52 @@ bq25896_err_t bq25896_set_charge_current_ma(bq25896_t *dev, uint16_t charge_curr
     return quantized.status;
 }
 
+bq25896_err_t bq25896_set_precharge_current_ma(bq25896_t *dev, uint16_t precharge_current_ma)
+{
+    bq25896_quantized_value_t quantized = bq25896_quantize_u16(precharge_current_ma,
+                                                               BQ25896_IPRECHG_MIN_MA,
+                                                               BQ25896_IPRECHG_MAX_MA,
+                                                               BQ25896_IPRECHG_OFFSET_MA,
+                                                               BQ25896_IPRECHG_STEP_MA,
+                                                               BQ25896_IPRECHG_RAW_MAX);
+    bq25896_err_t status = bq25896_update_bits(dev,
+                                               BQ25896_REG_05,
+                                               BQ25896_REG05_IPRECHG_MASK,
+                                               (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG05_IPRECHG_MASK,
+                                                                           BQ25896_REG05_IPRECHG_SHIFT,
+                                                                           quantized.reg_value));
+
+    if (BQ25896_FAILED(status))
+    {
+        return status;
+    }
+
+    return quantized.status;
+}
+
+bq25896_err_t bq25896_set_termination_current_ma(bq25896_t *dev, uint16_t termination_current_ma)
+{
+    bq25896_quantized_value_t quantized = bq25896_quantize_u16(termination_current_ma,
+                                                               BQ25896_ITERM_MIN_MA,
+                                                               BQ25896_ITERM_MAX_MA,
+                                                               BQ25896_ITERM_OFFSET_MA,
+                                                               BQ25896_ITERM_STEP_MA,
+                                                               BQ25896_ITERM_RAW_MAX);
+    bq25896_err_t status = bq25896_update_bits(dev,
+                                               BQ25896_REG_05,
+                                               BQ25896_REG05_ITERM_MASK,
+                                               (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG05_ITERM_MASK,
+                                                                           BQ25896_REG05_ITERM_SHIFT,
+                                                                           quantized.reg_value));
+
+    if (BQ25896_FAILED(status))
+    {
+        return status;
+    }
+
+    return quantized.status;
+}
+
 bq25896_err_t bq25896_set_charge_voltage_mv(bq25896_t *dev, uint16_t charge_voltage_mv)
 {
     bq25896_quantized_value_t quantized = bq25896_quantize_u16(charge_voltage_mv,
@@ -486,6 +532,29 @@ bq25896_err_t bq25896_set_charge_voltage_mv(bq25896_t *dev, uint16_t charge_volt
                                                BQ25896_REG06_VREG_MASK,
                                                (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG06_VREG_MASK,
                                                                            BQ25896_REG06_VREG_SHIFT,
+                                                                           quantized.reg_value));
+
+    if (BQ25896_FAILED(status))
+    {
+        return status;
+    }
+
+    return quantized.status;
+}
+
+bq25896_err_t bq25896_set_system_min_voltage_mv(bq25896_t *dev, uint16_t sys_min_voltage_mv)
+{
+    bq25896_quantized_value_t quantized = bq25896_quantize_u16(sys_min_voltage_mv,
+                                                               BQ25896_SYS_MIN_MIN_MV,
+                                                               BQ25896_SYS_MIN_MAX_MV,
+                                                               BQ25896_SYS_MIN_OFFSET_MV,
+                                                               BQ25896_SYS_MIN_STEP_MV,
+                                                               BQ25896_SYS_MIN_RAW_MAX);
+    bq25896_err_t status = bq25896_update_bits(dev,
+                                               BQ25896_REG_03,
+                                               BQ25896_REG03_SYS_MIN_MASK,
+                                               (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG03_SYS_MIN_MASK,
+                                                                           BQ25896_REG03_SYS_MIN_SHIFT,
                                                                            quantized.reg_value));
 
     if (BQ25896_FAILED(status))
@@ -513,6 +582,34 @@ bq25896_err_t bq25896_disable_otg(bq25896_t *dev)
                                BQ25896_REG03_OTG_CONFIG_MASK,
                                (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG03_OTG_CONFIG_MASK,
                                                            BQ25896_REG03_OTG_CONFIG_SHIFT,
+                                                           0u));
+}
+
+bq25896_err_t bq25896_enable_battery_power_path(bq25896_t *dev)
+{
+    bq25896_err_t status = bq25896_validate_device(dev);
+
+    if (BQ25896_FAILED(status))
+    {
+        return status;
+    }
+
+    status = bq25896_update_bits(dev,
+                                 BQ25896_REG_09,
+                                 BQ25896_REG09_BATFET_DIS_MASK,
+                                 (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG09_BATFET_DIS_MASK,
+                                                             BQ25896_REG09_BATFET_DIS_SHIFT,
+                                                             0u));
+    if (BQ25896_FAILED(status))
+    {
+        return status;
+    }
+
+    return bq25896_update_bits(dev,
+                               BQ25896_REG_00,
+                               BQ25896_REG00_EN_HIZ_MASK,
+                               (uint8_t)BQ25896_FIELD_PREP(BQ25896_REG00_EN_HIZ_MASK,
+                                                           BQ25896_REG00_EN_HIZ_SHIFT,
                                                            0u));
 }
 
@@ -777,6 +874,91 @@ bq25896_err_t bq25896_read_adc(const bq25896_t *dev, bq25896_adc_t *adc)
                                              BQ25896_REG13_IDPM_LIM_SHIFT,
                                              BQ25896_ADC_IDPM_LIM_OFFSET_MA,
                                              BQ25896_ADC_IDPM_LIM_STEP_MA);
+
+    return BQ25896_OK;
+}
+
+bq25896_err_t bq25896_read_charge_config(const bq25896_t *dev, bq25896_charge_config_t *cfg)
+{
+    bq25896_err_t rc = bq25896_validate_device(dev);
+
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    if (cfg == NULL)
+    {
+        return BQ25896_ERR_NULL;
+    }
+
+    memset(cfg, 0, sizeof(*cfg));
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_00, &cfg->raw_reg00);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_03, &cfg->raw_reg03);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_04, &cfg->raw_reg04);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_05, &cfg->raw_reg05);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_06, &cfg->raw_reg06);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    rc = bq25896_read_reg(dev, BQ25896_REG_09, &cfg->raw_reg09);
+    if (BQ25896_FAILED(rc))
+    {
+        return rc;
+    }
+
+    cfg->charge_enabled = (cfg->raw_reg03 & BQ25896_REG03_CHG_CONFIG_MASK) != 0u;
+    cfg->otg_enabled = (cfg->raw_reg03 & BQ25896_REG03_OTG_CONFIG_MASK) != 0u;
+    cfg->hiz_enabled = (cfg->raw_reg00 & BQ25896_REG00_EN_HIZ_MASK) != 0u;
+    cfg->batfet_disabled = (cfg->raw_reg09 & BQ25896_REG09_BATFET_DIS_MASK) != 0u;
+    cfg->sys_min_voltage_mv = bq25896_decode_u16(cfg->raw_reg03,
+                                                 BQ25896_REG03_SYS_MIN_MASK,
+                                                 BQ25896_REG03_SYS_MIN_SHIFT,
+                                                 BQ25896_SYS_MIN_OFFSET_MV,
+                                                 BQ25896_SYS_MIN_STEP_MV);
+    cfg->charge_voltage_mv = bq25896_decode_u16(cfg->raw_reg06,
+                                                BQ25896_REG06_VREG_MASK,
+                                                BQ25896_REG06_VREG_SHIFT,
+                                                BQ25896_VREG_OFFSET_MV,
+                                                BQ25896_VREG_STEP_MV);
+    cfg->charge_current_ma = bq25896_decode_u16(cfg->raw_reg04,
+                                                BQ25896_REG04_ICHG_MASK,
+                                                BQ25896_REG04_ICHG_SHIFT,
+                                                BQ25896_ICHG_OFFSET_MA,
+                                                BQ25896_ICHG_STEP_MA);
+    cfg->precharge_current_ma = bq25896_decode_u16(cfg->raw_reg05,
+                                                   BQ25896_REG05_IPRECHG_MASK,
+                                                   BQ25896_REG05_IPRECHG_SHIFT,
+                                                   BQ25896_IPRECHG_OFFSET_MA,
+                                                   BQ25896_IPRECHG_STEP_MA);
+    cfg->termination_current_ma = bq25896_decode_u16(cfg->raw_reg05,
+                                                     BQ25896_REG05_ITERM_MASK,
+                                                     BQ25896_REG05_ITERM_SHIFT,
+                                                     BQ25896_ITERM_OFFSET_MA,
+                                                     BQ25896_ITERM_STEP_MA);
 
     return BQ25896_OK;
 }

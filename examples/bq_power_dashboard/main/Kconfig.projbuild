@@ -1,0 +1,38 @@
+menu "BQ Power Dashboard"
+
+config BQ_POWER_DASHBOARD_I2C_SDA
+    int "I2C SDA GPIO"
+    default 7
+    range 0 48
+
+config BQ_POWER_DASHBOARD_I2C_SCL
+    int "I2C SCL GPIO"
+    default 8
+    range 0 48
+
+config BQ_POWER_DASHBOARD_I2C_FREQ_HZ
+    int "I2C clock frequency (Hz)"
+    default 400000
+    range 10000 1000000
+
+config BQ_POWER_DASHBOARD_BQ25896_ADDR
+    hex "BQ25896 7-bit I2C address"
+    default 0x6B
+    range 0x00 0x7F
+
+config BQ_POWER_DASHBOARD_BQ27220_ADDR
+    hex "BQ27220 7-bit I2C address"
+    default 0x55
+    range 0x00 0x7F
+
+config BQ_POWER_DASHBOARD_LOCAL_REFRESH_MS
+    int "Local refresh period (ms)"
+    default 5000
+    range 1000 60000
+
+config BQ_POWER_DASHBOARD_FULL_REFRESH_MS
+    int "Full refresh period (ms)"
+    default 120000
+    range 10000 600000
+
+endmenu
