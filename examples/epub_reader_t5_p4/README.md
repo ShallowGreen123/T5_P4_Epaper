@@ -34,6 +34,6 @@ idf.py -C examples/epub_reader_t5_p4 set-target esp32p4 build
 
 ## Notes
 
-- This example reuses the existing local `fastepd` and `sensorlib` components from `examples/fastEPD_lvgl_demo/components`.
+- This example reuses the repository-level `components/fastepd` and `components/sensorlib` components.
 - Third-party sources bundled under `components/epub_3p` include TinyXML2, miniz, PNGdec, and TJpgDec. Their original license headers are preserved in the vendored files.
 - Core EPUB parsing and layout logic is adapted from `atomic14/diy-esp32-epub-reader` with minimal structural changes plus T5-P4 specific fixes.

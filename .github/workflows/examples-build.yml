@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "examples/**"
+      - "components/**"
       - ".github/workflows/examples-build.yml"
   workflow_dispatch:
 

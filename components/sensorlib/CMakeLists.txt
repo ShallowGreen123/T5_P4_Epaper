@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/TouchDrvInterface.cpp"
+    INCLUDE_DIRS
+        "src"
+        "src/REG"
+        "src/platform"
+    REQUIRES
+        driver
+        esp_timer
+)

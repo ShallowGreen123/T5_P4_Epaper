@@ -4,7 +4,6 @@ build
 managed_components
 sdkconfig
 sdkconfig.old
-components/SensorLib/
 
 other/
 platformIO_P4/examples/reference/
