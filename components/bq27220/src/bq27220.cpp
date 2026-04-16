@@ -53,11 +53,28 @@ void bq27220_store_le(uint8_t *data, uint32_t value, size_t size)
     }
 }
 
+void bq27220_store_be(uint8_t *data, uint32_t value, size_t size)
+{
+    for (size_t i = 0; i < size; ++i) {
+        const size_t shift = (size - 1u - i) * 8u;
+        data[i] = (uint8_t)((value >> shift) & 0xFFu);
+    }
+}
+
 uint32_t bq27220_load_le(const uint8_t *data, size_t size)
 {
     uint32_t value = 0;
     for (size_t i = 0; i < size; ++i) {
         value |= ((uint32_t)data[i]) << (i * 8u);
+    }
+    return value;
+}
+
+uint32_t bq27220_load_be(const uint8_t *data, size_t size)
+{
+    uint32_t value = 0;
+    for (size_t i = 0; i < size; ++i) {
+        value = (value << 8u) | data[i];
     }
     return value;
 }
@@ -122,7 +139,18 @@ bool BQ27220::begin(i2c_master_bus_handle_t bus_handle,
     scl_speed_hz_ = device_config.scl_speed_hz;
     scl_wait_us_ = device_config.scl_wait_us;
     timeout_ms_ = (timeout_ms > 0) ? timeout_ms : BQ27220_I2C_TIMEOUT_MS_DEFAULT;
-    
+
+    const uint16_t device_number = getDeviceNumber();
+    if (device_number != BQ27220_DEVICE_ID) {
+        ESP_LOGE(TAG,
+                 "unexpected device id 0x%04x at 0x%02x, expected 0x%04x",
+                 device_number,
+                 addr_,
+                 BQ27220_DEVICE_ID);
+        end();
+        return false;
+    }
+
     return true;
 }
 
@@ -186,7 +214,7 @@ bool BQ27220::parameterCheck(uint16_t address, uint32_t value, size_t size, bool
     do {
         buffer[0] = (uint8_t)(address & 0xFFu);
         buffer[1] = (uint8_t)((address >> 8) & 0xFFu);
-        bq27220_store_le(&buffer[2], value, size);
+        bq27220_store_be(&buffer[2], value, size);
 
         if (update) {
             if (!i2cWriteBytes(CommandSelectSubclass, buffer, size + 2u)) {
@@ -228,8 +256,8 @@ bool BQ27220::parameterCheck(uint16_t address, uint32_t value, size_t size, bool
                          "Data mismatch at 0x%04x (%u): 0x%08" PRIx32 " != 0x%08" PRIx32,
                          address,
                          (unsigned)size,
-                         bq27220_load_le(old_data, size),
-                         bq27220_load_le(&buffer[2], size));
+                         bq27220_load_be(old_data, size),
+                         value);
             } else {
                 ret = true;
             }
