@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/bq27220.cpp"
+        "src/bq27220_data_memory.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_driver_i2c
+        esp_rom
+        log
+)
