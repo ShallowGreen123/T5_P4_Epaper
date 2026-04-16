@@ -10,7 +10,6 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -78,15 +77,6 @@ enum : size_t
     BQ27220_LINE_COUNT
 };
 
-enum class GaugeState
-{
-    Sleep,
-    Full,
-    Charge,
-    Discharge,
-    Relax
-};
-
 struct Bq25896Snapshot
 {
     bool initialized;
@@ -96,22 +86,13 @@ struct Bq25896Snapshot
     bq25896_charge_config_t cfg;
 };
 
-struct Bq27220Snapshot
+struct Bq27220PanelData
 {
     bool initialized;
     bool read_ok;
     bool vbus_connected;
-    bool charging;
-    bool full;
-    GaugeState state;
-    uint16_t soc;
-    uint16_t fcc_mah;
-    uint16_t soh_percent;
-    int16_t avg_current_ma;
-    int16_t current_ma;
-    uint16_t voltage_mv;
-    uint16_t remaining_capacity_mah;
-    uint16_t temperature_dk;
+    BQ27220State state;
+    BQ27220Snapshot gauge;
 };
 
 struct DashboardUi
@@ -201,24 +182,6 @@ static const char *charge_status_name(bq25896_charge_status_t status)
             return "DONE";
         default:
             return "UNKNOWN";
-    }
-}
-
-static const char *gauge_state_name(GaugeState state)
-{
-    switch (state)
-    {
-        case GaugeState::Sleep:
-            return "Sleep";
-        case GaugeState::Full:
-            return "Full";
-        case GaugeState::Charge:
-            return "Charge";
-        case GaugeState::Discharge:
-            return "Discharge";
-        case GaugeState::Relax:
-        default:
-            return "Relax";
     }
 }
 
@@ -605,30 +568,6 @@ static bool init_bq27220_device()
     return true;
 }
 
-static bool bq27220_read_u16(BQ27220 &gauge, uint8_t reg, uint16_t *value)
-{
-    uint8_t data[2] = {0};
-
-    if ((value == nullptr) || !gauge.i2cReadBytes(reg, data, sizeof(data)))
-    {
-        return false;
-    }
-
-    *value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-    return true;
-}
-
-static bool bq27220_read_gauging_status(BQ27220 &gauge, BQ27220GaugingStatus *status)
-{
-    if ((status == nullptr) || !gauge.controlSubCmd(Control_GAUGING_STATUS))
-    {
-        return false;
-    }
-
-    esp_rom_delay_us(1000);
-    return bq27220_read_u16(gauge, CommandMACData, &status->full);
-}
-
 static bool sample_bq25896(Bq25896Snapshot *snapshot)
 {
     if (snapshot == nullptr)
@@ -651,19 +590,8 @@ static bool sample_bq25896(Bq25896Snapshot *snapshot)
     return snapshot->read_ok;
 }
 
-static bool sample_bq27220(const Bq25896Snapshot *charger, Bq27220Snapshot *snapshot)
+static bool sample_bq27220(const Bq25896Snapshot *charger, Bq27220PanelData *snapshot)
 {
-    BQ27220BatteryStatus battery_status = {};
-    BQ27220GaugingStatus gauging_status = {};
-    uint16_t soc = 0;
-    uint16_t fcc = 0;
-    uint16_t voltage = 0;
-    uint16_t remaining_capacity = 0;
-    uint16_t state_of_health = 0;
-    uint16_t temperature = 0;
-    uint16_t current_raw = 0;
-    uint16_t avg_current_raw = 0;
-
     if (snapshot == nullptr)
     {
         return false;
@@ -679,53 +607,15 @@ static bool sample_bq27220(const Bq25896Snapshot *charger, Bq27220Snapshot *snap
         return false;
     }
 
-    snapshot->read_ok = bq27220_read_u16(s_bq27220, CommandBatteryStatus, &battery_status.full) &&
-                        bq27220_read_gauging_status(s_bq27220, &gauging_status) &&
-                        bq27220_read_u16(s_bq27220, CommandStateOfCharge, &soc) &&
-                        bq27220_read_u16(s_bq27220, CommandFullChargeCapacity, &fcc) &&
-                        bq27220_read_u16(s_bq27220, CommandVoltage, &voltage) &&
-                        bq27220_read_u16(s_bq27220, CommandRemainingCapacity, &remaining_capacity) &&
-                        bq27220_read_u16(s_bq27220, CommandStateOfHealth, &state_of_health) &&
-                        bq27220_read_u16(s_bq27220, CommandTemperature, &temperature) &&
-                        bq27220_read_u16(s_bq27220, CommandCurrent, &current_raw) &&
-                        bq27220_read_u16(s_bq27220, CommandAverageCurrent, &avg_current_raw);
+    snapshot->read_ok = s_bq27220.readSnapshot(&snapshot->gauge);
 
     if (!snapshot->read_ok)
     {
         return false;
     }
 
-    snapshot->soc = soc;
-    snapshot->fcc_mah = fcc;
-    snapshot->voltage_mv = voltage;
-    snapshot->remaining_capacity_mah = remaining_capacity;
-    snapshot->soh_percent = (uint16_t)(state_of_health & 0x00FFu);
-    snapshot->temperature_dk = temperature;
-    snapshot->current_ma = (int16_t)current_raw;
-    snapshot->avg_current_ma = (int16_t)avg_current_raw;
-    snapshot->charging = battery_status.reg.CHGING || (snapshot->avg_current_ma > CURRENT_THRESHOLD_MA);
-    snapshot->full = battery_status.reg.FC || gauging_status.reg.FC;
-
-    if (battery_status.reg.SLEEP)
-    {
-        snapshot->state = GaugeState::Sleep;
-    }
-    else if (snapshot->full)
-    {
-        snapshot->state = GaugeState::Full;
-    }
-    else if (snapshot->charging && snapshot->vbus_connected)
-    {
-        snapshot->state = GaugeState::Charge;
-    }
-    else if (battery_status.reg.DSG || (snapshot->avg_current_ma < -CURRENT_THRESHOLD_MA))
-    {
-        snapshot->state = GaugeState::Discharge;
-    }
-    else
-    {
-        snapshot->state = GaugeState::Relax;
-    }
+    snapshot->state =
+        BQ27220::classifyState(&snapshot->gauge, snapshot->vbus_connected, CURRENT_THRESHOLD_MA);
 
     return true;
 }
@@ -787,7 +677,7 @@ static void format_temperature_line(char *buffer, size_t buffer_size, uint16_t t
                   abs_deci_c % 10);
 }
 
-static void update_bq27220_ui(const Bq27220Snapshot &snapshot)
+static void update_bq27220_ui(const Bq27220PanelData &snapshot)
 {
     char line[96];
 
@@ -805,24 +695,24 @@ static void update_bq27220_ui(const Bq27220Snapshot &snapshot)
 
     std::snprintf(line, sizeof(line), "VBUS     : %s", snapshot.vbus_connected ? "IN" : "OUT");
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_VBUS], line);
-    std::snprintf(line, sizeof(line), "State    : %s", gauge_state_name(snapshot.state));
+    std::snprintf(line, sizeof(line), "State    : %s", BQ27220::stateName(snapshot.state));
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_STATE], line);
-    std::snprintf(line, sizeof(line), "SOC/FCC  : %u%% / %u / %u%%",
-                  snapshot.soc,
-                  snapshot.fcc_mah,
-                  snapshot.soh_percent);
+    std::snprintf(line, sizeof(line), "SOC/FCC/SOH : %u%% / %u / %u%%",
+                  snapshot.gauge.soc,
+                  snapshot.gauge.fcc_mah,
+                  snapshot.gauge.soh_percent);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_SOC_FCC_SOH], line);
-    format_temperature_line(line, sizeof(line), snapshot.temperature_dk);
+    format_temperature_line(line, sizeof(line), snapshot.gauge.temperature_dk);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_TEMP], line);
-    std::snprintf(line, sizeof(line), "AvgI     : %d mA", (int)snapshot.avg_current_ma);
+    std::snprintf(line, sizeof(line), "AvgI     : %d mA", (int)snapshot.gauge.average_current_ma);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_AVG_I], line);
-    std::snprintf(line, sizeof(line), "Volt     : %u mV", snapshot.voltage_mv);
+    std::snprintf(line, sizeof(line), "Volt     : %u mV", snapshot.gauge.voltage_mv);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_VOLT], line);
-    std::snprintf(line, sizeof(line), "Full?    : %s", snapshot.full ? "YES" : "NO");
+    std::snprintf(line, sizeof(line), "Full?    : %s", snapshot.gauge.full ? "YES" : "NO");
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_FULL], line);
     std::snprintf(line, sizeof(line), "Rem/Full : %u / %u mAh",
-                  snapshot.remaining_capacity_mah,
-                  snapshot.fcc_mah);
+                  snapshot.gauge.remaining_capacity_mah,
+                  snapshot.gauge.fcc_mah);
     set_label_text_if_changed(s_ui.bq27220_labels[BQ27220_LINE_REM_FULL], line);
 }
 
@@ -830,7 +720,7 @@ static void dashboard_refresh()
 {
     const int64_t now_ms = esp_timer_get_time() / 1000;
     Bq25896Snapshot charger = {};
-    Bq27220Snapshot gauge = {};
+    Bq27220PanelData gauge = {};
 
     (void)sample_bq25896(&charger);
     (void)sample_bq27220(&charger, &gauge);

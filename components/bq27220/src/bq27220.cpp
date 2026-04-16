@@ -122,6 +122,7 @@ bool BQ27220::begin(i2c_master_bus_handle_t bus_handle,
     scl_speed_hz_ = device_config.scl_speed_hz;
     scl_wait_us_ = device_config.scl_wait_us;
     timeout_ms_ = (timeout_ms > 0) ? timeout_ms : BQ27220_I2C_TIMEOUT_MS_DEFAULT;
+    
     return true;
 }
 
@@ -648,8 +649,7 @@ bool BQ27220::getControlStatus(BQ27220ControlStatus *ctrl_sta)
     if (ctrl_sta == nullptr) {
         return false;
     }
-    ctrl_sta->full = readRegU16(CommandControl);
-    return true;
+    return readRegU16Internal(CommandControl, &ctrl_sta->full);
 }
 
 bool BQ27220::getBatteryStatus(BQ27220BatteryStatus *batt_sta)
@@ -657,8 +657,7 @@ bool BQ27220::getBatteryStatus(BQ27220BatteryStatus *batt_sta)
     if (batt_sta == nullptr) {
         return false;
     }
-    batt_sta->full = readRegU16(CommandBatteryStatus);
-    return true;
+    return readRegU16Internal(CommandBatteryStatus, &batt_sta->full);
 }
 
 bool BQ27220::getOperationStatus(BQ27220OperationStatus *oper_sta)
@@ -666,8 +665,7 @@ bool BQ27220::getOperationStatus(BQ27220OperationStatus *oper_sta)
     if (oper_sta == nullptr) {
         return false;
     }
-    oper_sta->full = readRegU16(CommandOperationStatus);
-    return true;
+    return readRegU16Internal(CommandOperationStatus, &oper_sta->full);
 }
 
 bool BQ27220::getGaugingStatus(BQ27220GaugingStatus *gauging_sta)
@@ -680,8 +678,88 @@ bool BQ27220::getGaugingStatus(BQ27220GaugingStatus *gauging_sta)
         return false;
     }
     bq27220_delay_us(BQ27220_SELECT_DELAY_US);
-    gauging_sta->full = readRegU16(CommandMACData);
+    return readRegU16Internal(CommandMACData, &gauging_sta->full);
+}
+
+bool BQ27220::readSnapshot(BQ27220Snapshot *snapshot)
+{
+    uint16_t current_raw = 0;
+    uint16_t average_current_raw = 0;
+    uint16_t state_of_health = 0;
+
+    if (snapshot == nullptr) {
+        return false;
+    }
+
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    if (!getBatteryStatus(&snapshot->battery_status) ||
+        !getGaugingStatus(&snapshot->gauging_status) ||
+        !readRegU16Internal(CommandStateOfCharge, &snapshot->soc) ||
+        !readRegU16Internal(CommandFullChargeCapacity, &snapshot->fcc_mah) ||
+        !readRegU16Internal(CommandVoltage, &snapshot->voltage_mv) ||
+        !readRegU16Internal(CommandRemainingCapacity, &snapshot->remaining_capacity_mah) ||
+        !readRegU16Internal(CommandStateOfHealth, &state_of_health) ||
+        !readRegU16Internal(CommandTemperature, &snapshot->temperature_dk) ||
+        !readRegU16Internal(CommandCurrent, &current_raw) ||
+        !readRegU16Internal(CommandAverageCurrent, &average_current_raw)) {
+        return false;
+    }
+
+    snapshot->current_ma = (int16_t)current_raw;
+    snapshot->average_current_ma = (int16_t)average_current_raw;
+    snapshot->soh_percent = (uint16_t)(state_of_health & 0x00FFu);
+    snapshot->charging =
+        snapshot->battery_status.reg.CHGING || (snapshot->average_current_ma > 0);
+    snapshot->full = snapshot->battery_status.reg.FC || snapshot->gauging_status.reg.FC;
     return true;
+}
+
+BQ27220State BQ27220::classifyState(const BQ27220Snapshot *snapshot,
+                                    bool vbus_connected,
+                                    int16_t current_threshold_ma)
+{
+    if (snapshot == nullptr) {
+        return BQ27220StateRelax;
+    }
+
+    if (snapshot->battery_status.reg.SLEEP) {
+        return BQ27220StateSleep;
+    }
+
+    if (snapshot->full) {
+        return BQ27220StateFull;
+    }
+
+    if (snapshot->charging &&
+        vbus_connected &&
+        (snapshot->average_current_ma > current_threshold_ma)) {
+        return BQ27220StateCharge;
+    }
+
+    if (snapshot->battery_status.reg.DSG ||
+        (snapshot->average_current_ma < -current_threshold_ma)) {
+        return BQ27220StateDischarge;
+    }
+
+    return BQ27220StateRelax;
+}
+
+const char *BQ27220::stateName(BQ27220State state)
+{
+    switch (state) {
+        case BQ27220StateSleep:
+            return "Sleep";
+        case BQ27220StateFull:
+            return "Full";
+        case BQ27220StateCharge:
+            return "Charge";
+        case BQ27220StateDischarge:
+            return "Discharge";
+        case BQ27220StateRelax:
+        default:
+            return "Relax";
+    }
 }
 
 uint16_t BQ27220::getTemperature(void)

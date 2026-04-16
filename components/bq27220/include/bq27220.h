@@ -89,6 +89,29 @@ typedef union GaugingStatus {
     uint16_t full;
 } BQ27220GaugingStatus;
 
+typedef enum {
+    BQ27220StateSleep = 0,
+    BQ27220StateFull = 1,
+    BQ27220StateCharge = 2,
+    BQ27220StateDischarge = 3,
+    BQ27220StateRelax = 4,
+} BQ27220State;
+
+typedef struct BQ27220Snapshot {
+    BQ27220BatteryStatus battery_status;
+    BQ27220GaugingStatus gauging_status;
+    uint16_t soc;
+    uint16_t fcc_mah;
+    uint16_t soh_percent;
+    int16_t current_ma;
+    int16_t average_current_ma;
+    uint16_t voltage_mv;
+    uint16_t remaining_capacity_mah;
+    uint16_t temperature_dk;
+    bool charging;
+    bool full;
+} BQ27220Snapshot;
+
 class BQ27220 {
 public:
     BQ27220();
@@ -125,6 +148,11 @@ public:
     bool getBatteryStatus(BQ27220BatteryStatus *batt_sta);
     bool getOperationStatus(BQ27220OperationStatus *oper_sta);
     bool getGaugingStatus(BQ27220GaugingStatus *gauging_sta);
+    bool readSnapshot(BQ27220Snapshot *snapshot);
+    static BQ27220State classifyState(const BQ27220Snapshot *snapshot,
+                                      bool vbus_connected,
+                                      int16_t current_threshold_ma = 20);
+    static const char *stateName(BQ27220State state);
     uint16_t getTemperature(void);
     uint16_t getFullChargeCapacity(void);
     uint16_t getDesignCapacity(void);
