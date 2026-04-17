@@ -19,6 +19,10 @@ constexpr uint32_t BQ27220_TIMEOUT_COMMON_US = 2000000u;
 constexpr uint32_t BQ27220_TIMEOUT_RESET_US = 4000000u;
 constexpr uint32_t BQ27220_TIMEOUT_CYCLE_INTERVAL_US = 1000u;
 constexpr uint32_t BQ27220_DELAY_CHUNK_US = 1000000u;
+constexpr uint16_t BQ27220_DM_CHARGING_CURRENT_MAX_MA = 1000u;
+constexpr uint16_t BQ27220_DM_CHARGING_VOLTAGE_MAX_MV = 4600u;
+constexpr uint16_t BQ27220_DM_TAPER_CURRENT_MAX_MA = 1000u;
+constexpr uint16_t BQ27220_DM_CHARGE_TERM_VOLTAGE_MAX_MV = 1000u;
 
 constexpr uint32_t bq27220_timeout_cycles(uint32_t timeout_us)
 {
@@ -509,17 +513,97 @@ bool BQ27220::reset(void)
 bool BQ27220::setDefaultCapacity(uint16_t cap)
 {
     const uint16_t len = get_gauge_data_memory_len();
+    bool found_fcc = false;
+    bool found_design = false;
 
     for (uint16_t i = 0; i < len; ++i) {
         if (gauge_data_memory[i].address ==
             BQ27220DMAddressGasGaugingCEDVProfile1FullChargeCapacity) {
             gauge_data_memory[i].value.u16 = cap;
+            found_fcc = true;
         }
         if (gauge_data_memory[i].address ==
             BQ27220DMAddressGasGaugingCEDVProfile1DesignCapacity) {
             gauge_data_memory[i].value.u16 = cap;
+            found_design = true;
         }
     }
+
+    if (!found_fcc || !found_design) {
+        ESP_LOGE(TAG,
+                 "capacity DM entries missing: FCC=%d Design=%d",
+                 found_fcc ? 1 : 0,
+                 found_design ? 1 : 0);
+        return false;
+    }
+
+    return true;
+}
+
+bool BQ27220::setChargeParameters(uint16_t charging_current_ma,
+                                  uint16_t charging_voltage_mv,
+                                  uint16_t taper_current_ma,
+                                  uint16_t charge_termination_voltage_mv)
+{
+    if (charging_current_ma > BQ27220_DM_CHARGING_CURRENT_MAX_MA) {
+        ESP_LOGE(TAG, "charging_current_ma out of range: %u", charging_current_ma);
+        return false;
+    }
+    if (charging_voltage_mv > BQ27220_DM_CHARGING_VOLTAGE_MAX_MV) {
+        ESP_LOGE(TAG, "charging_voltage_mv out of range: %u", charging_voltage_mv);
+        return false;
+    }
+    if (taper_current_ma > BQ27220_DM_TAPER_CURRENT_MAX_MA) {
+        ESP_LOGE(TAG, "taper_current_ma out of range: %u", taper_current_ma);
+        return false;
+    }
+    if (charge_termination_voltage_mv > BQ27220_DM_CHARGE_TERM_VOLTAGE_MAX_MV) {
+        ESP_LOGE(TAG,
+                 "charge_termination_voltage_mv out of range: %u",
+                 charge_termination_voltage_mv);
+        return false;
+    }
+
+    const uint16_t len = get_gauge_data_memory_len();
+    bool found_charge_current = false;
+    bool found_charge_voltage = false;
+    bool found_taper_current = false;
+    bool found_charge_term_voltage = false;
+
+    for (uint16_t i = 0; i < len; ++i) {
+        switch (gauge_data_memory[i].address) {
+            case BQ27220DMAddressConfigurationChargeChargingCurrent:
+                gauge_data_memory[i].value.u16 = charging_current_ma;
+                found_charge_current = true;
+                break;
+            case BQ27220DMAddressConfigurationChargeChargingVoltage:
+                gauge_data_memory[i].value.u16 = charging_voltage_mv;
+                found_charge_voltage = true;
+                break;
+            case BQ27220DMAddressConfigurationChargeTerminationTaperCurrent:
+                gauge_data_memory[i].value.u16 = taper_current_ma;
+                found_taper_current = true;
+                break;
+            case BQ27220DMAddressGasGaugingCEDVProfile1ChargeTerminationVoltage:
+                gauge_data_memory[i].value.u16 = charge_termination_voltage_mv;
+                found_charge_term_voltage = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (!found_charge_current || !found_charge_voltage || !found_taper_current ||
+        !found_charge_term_voltage) {
+        ESP_LOGE(TAG,
+                 "charge DM entries missing: I=%d V=%d Taper=%d TermV=%d",
+                 found_charge_current ? 1 : 0,
+                 found_charge_voltage ? 1 : 0,
+                 found_taper_current ? 1 : 0,
+                 found_charge_term_voltage ? 1 : 0);
+        return false;
+    }
+
     return true;
 }
 

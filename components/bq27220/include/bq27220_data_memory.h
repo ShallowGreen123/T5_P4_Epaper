@@ -31,12 +31,16 @@ typedef enum
 
 typedef enum
 {
+    BQ27220DMAddressConfigurationChargeChargingCurrent = 0x91FB,
+    BQ27220DMAddressConfigurationChargeChargingVoltage = 0x91FD,
+    BQ27220DMAddressConfigurationChargeTerminationTaperCurrent = 0x9201,
     BQ27220DMAddressConfigurationRegistersOperationConfigA = 0x9206,
     BQ27220DMAddressConfigurationRegistersOperationConfigB = 0x9208,
     BQ27220DMAddressGasGaugingCEDVProfile1GaugingConfig = 0x929B,
     BQ27220DMAddressGasGaugingCEDVProfile1FullChargeCapacity = 0x929D,
     BQ27220DMAddressGasGaugingCEDVProfile1DesignCapacity = 0x929F,
     BQ27220DMAddressGasGaugingCEDVProfile1EMF = 0x92A3,
+    BQ27220DMAddressGasGaugingCEDVProfile1ChargeTerminationVoltage = 0x92A5,
     BQ27220DMAddressGasGaugingCEDVProfile1C0 = 0x92A9,
     BQ27220DMAddressGasGaugingCEDVProfile1R0 = 0x92AB,
     BQ27220DMAddressGasGaugingCEDVProfile1T0 = 0x92AD,

@@ -135,6 +135,10 @@ public:
     bool init(const BQ27220DMData *data_memory = gauge_data_memory);
     bool reset(void);
     bool setDefaultCapacity(uint16_t cap);
+    bool setChargeParameters(uint16_t charging_current_ma,
+                             uint16_t charging_voltage_mv,
+                             uint16_t taper_current_ma,
+                             uint16_t charge_termination_voltage_mv = 100u);
 
     bool sealAccess(void);
     bool unsealAccess(void);

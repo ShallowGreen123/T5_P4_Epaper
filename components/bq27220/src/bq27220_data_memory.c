@@ -2,7 +2,7 @@
 
 const BQ27220DMGaugingConfig data_memory_gauging_config = {
     .CCT = 1,
-    .CSYNC = 0,
+    .CSYNC = 1,
     .EDV_CMP = 0,
     .SC = 1,
     .FIXED_EDV0 = 1,
@@ -17,6 +17,21 @@ BQ27220DMData gauge_data_memory[] = {
         .address = BQ27220DMAddressGasGaugingCEDVProfile1GaugingConfig,
         .type = BQ27220DMTypePtr16,
         .value.ptr = (uintptr_t)&data_memory_gauging_config,
+    },
+    {
+        .address = BQ27220DMAddressConfigurationChargeChargingCurrent,
+        .type = BQ27220DMTypeU16,
+        .value.u16 = 512,
+    },
+    {
+        .address = BQ27220DMAddressConfigurationChargeChargingVoltage,
+        .type = BQ27220DMTypeU16,
+        .value.u16 = 4208,
+    },
+    {
+        .address = BQ27220DMAddressConfigurationChargeTerminationTaperCurrent,
+        .type = BQ27220DMTypeU16,
+        .value.u16 = 64,
     },
     {
         .address = BQ27220DMAddressConfigurationRegistersOperationConfigA,
@@ -37,6 +52,11 @@ BQ27220DMData gauge_data_memory[] = {
         .address = BQ27220DMAddressGasGaugingCEDVProfile1DesignCapacity,
         .type = BQ27220DMTypeU16,
         .value.u16 = 1500,
+    },
+    {
+        .address = BQ27220DMAddressGasGaugingCEDVProfile1ChargeTerminationVoltage,
+        .type = BQ27220DMTypeU16,
+        .value.u16 = 100,
     },
     {
         .address = BQ27220DMAddressGasGaugingCEDVProfile1EMF,

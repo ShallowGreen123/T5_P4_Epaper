@@ -37,9 +37,10 @@ constexpr uint8_t FULL_PASSES = 5;
 
 constexpr uint16_t RECOVER_IINLIM_MA = 1000;
 constexpr uint16_t RECOVER_ICHG_MA = 512;
-constexpr uint16_t RECOVER_IPRECHG_MA = 128;
-constexpr uint16_t RECOVER_ITERM_MA = 128;
+constexpr uint16_t RECOVER_IPRECHG_MA = 64;
+constexpr uint16_t RECOVER_ITERM_MA = 64;
 constexpr uint16_t RECOVER_VREG_MV = 4208;
+constexpr uint16_t RECOVER_TERM_VOLTAGE_DELTA_MV = 100;
 constexpr uint16_t RECOVER_SYSMIN_MV = 3300;
 constexpr uint16_t RECOVER_CAPACITY_MAH = 1100;
 
@@ -566,7 +567,21 @@ static bool init_bq27220_device()
         return false;
     }
 
-    (void)s_bq27220.setDefaultCapacity(RECOVER_CAPACITY_MAH);
+    if (!s_bq27220.setDefaultCapacity(RECOVER_CAPACITY_MAH))
+    {
+        ESP_LOGE(TAG, "BQ27220 setDefaultCapacity failed");
+        return false;
+    }
+
+    if (!s_bq27220.setChargeParameters(RECOVER_ICHG_MA,
+                                       RECOVER_VREG_MV,
+                                       RECOVER_ITERM_MA,
+                                       RECOVER_TERM_VOLTAGE_DELTA_MV))
+    {
+        ESP_LOGE(TAG, "BQ27220 setChargeParameters failed");
+        return false;
+    }
+
     if (!s_bq27220.init())
     {
         ESP_LOGW(TAG, "BQ27220 init failed");
