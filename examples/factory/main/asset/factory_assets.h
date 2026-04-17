@@ -1,0 +1,7 @@
+#pragma once
+
+#include "lvgl.h"
+
+#define FACTORY_FONT_TITLE LV_FONT_DEFAULT
+#define FACTORY_FONT_BODY LV_FONT_DEFAULT
+#define FACTORY_FONT_MONO LV_FONT_DEFAULT

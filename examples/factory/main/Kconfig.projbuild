@@ -1,0 +1,37 @@
+menu "Factory Example"
+
+config FACTORY_TOUCH_I2C_ADDR
+    hex "GT911 7-bit I2C address"
+    default 0x5D
+    range 0x00 0x7F
+
+config FACTORY_TOUCH_I2C_SDA
+    int "Shared I2C SDA GPIO"
+    default 7
+    range 0 54
+
+config FACTORY_TOUCH_I2C_SCL
+    int "Shared I2C SCL GPIO"
+    default 8
+    range 0 54
+
+config FACTORY_TOUCH_INT_GPIO
+    int "Touch interrupt GPIO"
+    default 3
+    range 0 54
+
+config FACTORY_DISPLAY_TEST_LOCAL_REFRESH_MS
+    int "Display test local refresh period (ms)"
+    default 1200
+    range 100 60000
+
+config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
+    int "Display test automatic full refresh period (ms)"
+    default 30000
+    range 1000 600000
+
+config FACTORY_BOOT_TOUCH_DIAGNOSTICS
+    bool "Boot directly into the touch diagnostics page"
+    default n
+
+endmenu
