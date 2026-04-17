@@ -6,7 +6,6 @@ idf_component_register(
         "ui.cpp"
         "ui_port.cpp"
         "scr_mrg.cpp"
-        "idf_arduino_compat.cpp"
         ${LVGL_DEMO_ASSETS}
     INCLUDE_DIRS "." "src"
     REQUIRES
@@ -15,7 +14,6 @@ idf_component_register(
         esp_timer
         fastepd
         lvgl
-        sensorlib
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

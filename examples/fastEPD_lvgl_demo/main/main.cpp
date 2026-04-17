@@ -6,6 +6,7 @@
  */
 
 #include <esp_heap_caps.h>
+#include <esp_check.h>
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_sleep.h>
@@ -14,18 +15,21 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <driver/gpio.h>
-#include <driver/i2c.h>
+#include <driver/i2c_master.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "esp_io_expander.h"
+#include "esp_io_expander_pca9535.h"
+#include "esp_lcd_io_i2c.h"
+#include "esp_lcd_touch.h"
+#include "esp_lcd_touch_gt911.h"
 #include "sdkconfig.h"
 #include "lvgl.h"
 #include <FastEPD.h>
 #include "ui.h"
 #include "scr_mrg.h"
-#include "TouchDrvGT911.hpp"
-#include "ExtensionIOXL9555.hpp" // expander used for pin control on some boards
 
 static const char *TAG = "fastEPD_lvgl";
 
@@ -33,10 +37,7 @@ static const char *TAG = "fastEPD_lvgl";
 #define I2C_SDA_PIN 7
 #define I2C_SCL_PIN 8
 
-// translate to the names used by the GT911 example
-#define SENSOR_SDA       I2C_SDA_PIN
-#define SENSOR_SCL       I2C_SCL_PIN
-#define SENSOR_IRQ       5  // interrupt pin from touch controller
+#define TOUCH_INT_PIN    5
 
 
 #define DISP_WIDTH 1440
@@ -72,59 +73,194 @@ static int g_epd_1bpp_partial_passes = 7;
 static int g_epd_1bpp_full_passes = 5;
 static bool g_first_4bpp_refresh = true;
 
-// --- GT911 touch globals --------------------------------------------------
-TouchDrvGT911 touch;
-int16_t gt_x[5], gt_y[5];
-
-ExtensionIOXL9555 io;
-
-static constexpr uint32_t EXTIO_PIN_BASE = 0x1000;
-static constexpr uint32_t EXTIO_PIN(uint32_t pin) { return EXTIO_PIN_BASE + pin; }
-
-static void idf_gpio_mode(uint32_t pin, uint8_t mode)
-{
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.pin_bit_mask = (1ULL << pin);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    io_conf.mode = (mode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-}
-
-static void gpioWrite(uint32_t pin, uint8_t value)
-{
-    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
-        io.digitalWrite((uint8_t)(pin - EXTIO_PIN_BASE), value);
-        return;
-    }
-    gpio_set_level((gpio_num_t)pin, value);
-}
-
-static int gpioRead(uint32_t pin)
-{
-    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
-        return io.digitalRead((uint8_t)(pin - EXTIO_PIN_BASE));
-    }
-    return gpio_get_level((gpio_num_t)pin);
-}
-
-static void gpioMode(uint32_t pin, uint8_t mode)
-{
-    if (pin >= EXTIO_PIN_BASE && pin < (EXTIO_PIN_BASE + 16)) {
-        io.pinMode((uint8_t)(pin - EXTIO_PIN_BASE), mode);
-        return;
-    }
-    idf_gpio_mode(pin, mode);
-}
-
-// --------------------------------------------------------------------------
-
-
+static constexpr uint8_t kPca9535Address = ESP_IO_EXPANDER_I2C_PCA9535_ADDRESS_000;
+static i2c_master_bus_handle_t s_i2c_bus = NULL;
+static esp_io_expander_handle_t s_io = NULL;
+static esp_lcd_panel_io_handle_t s_touch_io = NULL;
+static esp_lcd_touch_handle_t s_touch = NULL;
+static bool s_touch_ready = false;
 
 FASTEPD epaper;
 uint8_t *decodebuffer = NULL;
 uint8_t *pFramebuffer;
+
+static constexpr uint32_t pin_mask(uint8_t pin)
+{
+    return (1UL << pin);
+}
+
+static esp_err_t set_touch_int_mode(gpio_mode_t mode)
+{
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.pin_bit_mask = (1ULL << TOUCH_INT_PIN);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_conf.mode = mode;
+    return gpio_config(&io_conf);
+}
+
+static esp_err_t init_shared_i2c_bus()
+{
+    if (s_i2c_bus != NULL) {
+        return ESP_OK;
+    }
+
+    i2c_master_bus_config_t bus_config = {};
+    bus_config.i2c_port = I2C_NUM_0;
+    bus_config.sda_io_num = (gpio_num_t)I2C_SDA_PIN;
+    bus_config.scl_io_num = (gpio_num_t)I2C_SCL_PIN;
+    bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_config.glitch_ignore_cnt = 7;
+    bus_config.flags.enable_internal_pullup = true;
+
+    esp_err_t err = i2c_new_master_bus(&bus_config, &s_i2c_bus);
+    if (err == ESP_OK) {
+        bbepSetI2CMasterBus(s_i2c_bus);
+    }
+    return err;
+}
+
+static esp_err_t expander_set_pin(uint8_t pin, bool high)
+{
+    return esp_io_expander_set_level(s_io, pin_mask(pin), high ? 1 : 0);
+}
+
+static esp_err_t init_expander()
+{
+    if (s_io != NULL) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = esp_io_expander_new_i2c_pca9535(s_i2c_bus, kPca9535Address, &s_io);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    const uint32_t output_mask =
+        pin_mask(BOARD_PCA_00_T_RST) |
+        pin_mask(BOARD_PCA_01_CC_SW0) |
+        pin_mask(BOARD_PCA_02_CC_SW1) |
+        pin_mask(BOARD_PCA_03_LR_RST) |
+        pin_mask(BOARD_PCA_04_NRF_CE) |
+        pin_mask(BOARD_PCA_05_SHUTDOWN) |
+        pin_mask(BOARD_PCA_06_HDMI_RST) |
+        pin_mask(BOARD_PCA_07_HDMI_EN) |
+        pin_mask(BOARD_PCA_10_EP_OE) |
+        pin_mask(BOARD_PCA_11_EP_MODE) |
+        pin_mask(BOARD_PCA_12_1V8_EN) |
+        pin_mask(BOARD_PCA_13_TPS_PWRUP) |
+        pin_mask(BOARD_PCA_14_VCOM_CTRL) |
+        pin_mask(BOARD_PCA_15_TPS_WAKEUP);
+    const uint32_t input_mask =
+        pin_mask(BOARD_PCA_16_TPS_PWR_GOOD) |
+        pin_mask(BOARD_PCA_17_TPS_INT);
+
+    ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(s_io, output_mask, IO_EXPANDER_OUTPUT), TAG, "configure PCA9535 outputs failed");
+    ESP_RETURN_ON_ERROR(esp_io_expander_set_level(s_io, output_mask, 1), TAG, "set PCA9535 outputs failed");
+    ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(s_io, input_mask, IO_EXPANDER_INPUT), TAG, "configure PCA9535 inputs failed");
+    return ESP_OK;
+}
+
+static esp_err_t reset_gt911(uint32_t address)
+{
+    ESP_RETURN_ON_ERROR(set_touch_int_mode(GPIO_MODE_OUTPUT), TAG, "configure touch INT output failed");
+    ESP_RETURN_ON_ERROR(expander_set_pin(BOARD_PCA_00_T_RST, false), TAG, "assert touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    const int int_level = (address == ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP) ? 1 : 0;
+    ESP_RETURN_ON_ERROR(gpio_set_level((gpio_num_t)TOUCH_INT_PIN, int_level), TAG, "drive touch INT failed");
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    ESP_RETURN_ON_ERROR(expander_set_pin(BOARD_PCA_00_T_RST, true), TAG, "release touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    ESP_RETURN_ON_ERROR(set_touch_int_mode(GPIO_MODE_INPUT), TAG, "configure touch INT input failed");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return ESP_OK;
+}
+
+static void cleanup_touch_handles()
+{
+    if (s_touch != NULL) {
+        esp_lcd_touch_del(s_touch);
+        s_touch = NULL;
+    }
+    if (s_touch_io != NULL) {
+        esp_lcd_panel_io_del(s_touch_io);
+        s_touch_io = NULL;
+    }
+}
+
+static esp_err_t init_gt911_touch(uint32_t address)
+{
+    cleanup_touch_handles();
+    ESP_RETURN_ON_ERROR(reset_gt911(address), TAG, "reset GT911 failed");
+
+    esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = address,
+        .on_color_trans_done = NULL,
+        .user_ctx = NULL,
+        .control_phase_bytes = 1,
+        .dc_bit_offset = 0,
+        .lcd_cmd_bits = 16,
+        .lcd_param_bits = 0,
+        .flags = {
+            .dc_low_on_data = 0,
+            .disable_control_phase = 1,
+        },
+        .scl_speed_hz = 400000,
+    };
+
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(s_i2c_bus, &io_config, &s_touch_io), TAG, "create GT911 panel io failed");
+
+    esp_lcd_touch_config_t touch_config = {
+        .x_max = DISP_WIDTH,
+        .y_max = DISP_HEIGHT,
+        .rst_gpio_num = GPIO_NUM_NC,
+        .int_gpio_num = (gpio_num_t)TOUCH_INT_PIN,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+        .flags = {
+            .swap_xy = 0,
+            .mirror_x = 0,
+            .mirror_y = 0,
+        },
+        .process_coordinates = NULL,
+        .interrupt_callback = NULL,
+        .user_data = NULL,
+        .driver_data = NULL,
+    };
+
+    esp_err_t err = esp_lcd_touch_new_i2c_gt911(s_touch_io, &touch_config, &s_touch);
+    if (err != ESP_OK) {
+        cleanup_touch_handles();
+        return err;
+    }
+    return ESP_OK;
+}
+
+static void init_touch()
+{
+    s_touch_ready = false;
+
+    esp_err_t err = init_gt911_touch(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "GT911 init at 0x%02X failed: %s", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, esp_err_to_name(err));
+        err = init_gt911_touch(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "GT911 unavailable, continue without touch: %s", esp_err_to_name(err));
+        cleanup_touch_handles();
+        return;
+    }
+
+    s_touch_ready = true;
+    ESP_LOGI(TAG, "GT911 ready");
+}
 
 static uint16_t epd_norm_rotation(uint16_t rotation)
 {
@@ -403,21 +539,17 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
                 ly = (disp->ver_res - 1) - ly;
             }
 
-            int32_t px = lx;
             int32_t py = ly;
             if (g_epd_rotation_deg == 90)
             {
-                px = (DISP_WIDTH - 1) - ly;
                 py = lx;
             }
             else if (g_epd_rotation_deg == 180)
             {
-                px = (DISP_WIDTH - 1) - lx;
                 py = (DISP_HEIGHT - 1) - ly;
             }
             else if (g_epd_rotation_deg == 270)
             {
-                px = ly;
                 py = (DISP_HEIGHT - 1) - lx;
             }
 
@@ -436,16 +568,24 @@ static void disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *c
 
 static void touchpad_read(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
 {
+    (void)indev_drv;
     static lv_coord_t last_x = 0;
     static lv_coord_t last_y = 0;
 
-    // Do not gate on IRQ level. GT911 may be configured for edge-triggered IRQ
-    // (short pulses), which LVGL's default indev read period can miss. Polling
-    // the point register is deterministic and works regardless of IRQ mode.
-    uint8_t touched = touch.getPoint(gt_x, gt_y, 1);
-    if (touched > 0) {
-        uint16_t touch_x = gt_x[0];
-        uint16_t touch_y = gt_y[0];
+    if (s_touch == NULL) {
+        data->state = LV_INDEV_STATE_REL;
+        data->point.x = last_x;
+        data->point.y = last_y;
+        return;
+    }
+
+    esp_lcd_touch_read_data(s_touch);
+
+    uint8_t touched = 0;
+    esp_lcd_touch_point_data_t points[1] = {};
+    if (esp_lcd_touch_get_data(s_touch, points, &touched, 1) == ESP_OK && touched > 0) {
+        uint16_t touch_x = points[0].x;
+        uint16_t touch_y = points[0].y;
 
         int32_t phys_x = (DISP_WIDTH - 1) - (int32_t)touch_y;
         int32_t phys_y = (int32_t)touch_x;
@@ -540,59 +680,9 @@ void lv_port_disp_init(void)
 
 void idf_setup()
 {
-    // initialize IO expander so we can control reset/irq lines if wired that way
-    const uint8_t chip_address = XL9555_SLAVE_ADDRESS0;
-    if (io.begin((i2c_port_t)I2C_NUM_0, chip_address, I2C_SDA_PIN, I2C_SCL_PIN)) {
-        const uint8_t expands[] = {
-            BOARD_PCA_00_T_RST,
-            BOARD_PCA_01_CC_SW0,
-            BOARD_PCA_02_CC_SW1,
-            BOARD_PCA_03_LR_RST,
-            BOARD_PCA_04_NRF_CE,
-            BOARD_PCA_05_SHUTDOWN,
-            BOARD_PCA_06_HDMI_RST,
-            BOARD_PCA_07_HDMI_EN,
-            BOARD_PCA_10_EP_OE,
-            BOARD_PCA_11_EP_MODE,
-            BOARD_PCA_12_1V8_EN,
-            BOARD_PCA_13_TPS_PWRUP,
-            BOARD_PCA_14_VCOM_CTRL,
-            BOARD_PCA_15_TPS_WAKEUP,
-            BOARD_PCA_16_TPS_PWR_GOOD,
-            BOARD_PCA_17_TPS_INT
-        };
-        for (auto pin : expands) {
-            io.pinMode(pin, OUTPUT);
-            io.digitalWrite(pin, HIGH);
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
-    } else {
-        while (1) {
-            ESP_LOGE(TAG, "Failed to find XL9555 - check your wiring!");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-
-    io.pinMode(BOARD_PCA_14_VCOM_CTRL, INPUT);
-    io.pinMode(BOARD_PCA_15_TPS_WAKEUP, INPUT);
-
-    touch.setPins((int)EXTIO_PIN(BOARD_PCA_00_T_RST), SENSOR_IRQ);
-    touch.setGpioCallback(gpioMode, gpioWrite, gpioRead);
-    if (!touch.begin((i2c_port_t)I2C_NUM_0, GT911_SLAVE_ADDRESS_L, SENSOR_SDA, SENSOR_SCL)) {
-        while (1) {
-            ESP_LOGE(TAG, "Failed to find GT911 - check your wiring!");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            if (touch.begin((i2c_port_t)I2C_NUM_0, GT911_SLAVE_ADDRESS_L, SENSOR_SDA, SENSOR_SCL)) {
-                ESP_LOGI(TAG, "GT911 found on retry!");
-                break;
-            }
-        }
-    }
-
-    ESP_LOGI(TAG, "Init GT911 Sensor success!");
-    // Prefer level-triggered mode for reliable polling/readout in GUI loops.
-    // (Edge-triggered modes generate short pulses which can be missed.)
-    touch.setInterruptMode(LOW_LEVEL_QUERY);
+    ESP_ERROR_CHECK(init_shared_i2c_bus());
+    ESP_ERROR_CHECK(init_expander());
+    init_touch();
 
     epaper.initPanel(BB_PANEL_LILYGO_T5P4, 40000000);
     epaper.setPanelSize(DISP_WIDTH, DISP_HEIGHT);
