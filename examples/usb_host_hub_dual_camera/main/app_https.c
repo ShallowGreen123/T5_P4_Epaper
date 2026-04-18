@@ -27,6 +27,7 @@ typedef struct {
     camera_t *cameras;
     int camera_count;
     int active_camera_count;
+    int allocated_camera_count;
 } camera_system_t;
 
 static camera_system_t camera_system = {0};
@@ -35,15 +36,32 @@ static void update_camera_system(void)
 {
     int connected_num = 0;
     app_uvc_get_connect_dev_num(&connected_num);
-    if (camera_system.cameras == NULL) {
-        camera_system.cameras = calloc(connected_num, sizeof(camera_t));
-        if (camera_system.cameras == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for camera system");
+
+    if (connected_num <= 0) {
+        free(camera_system.cameras);
+        camera_system.cameras = NULL;
+        camera_system.camera_count = 0;
+        camera_system.active_camera_count = 0;
+        camera_system.allocated_camera_count = 0;
+        return;
+    }
+
+    if (camera_system.allocated_camera_count != connected_num) {
+        camera_t *new_cameras = realloc(camera_system.cameras, connected_num * sizeof(camera_t));
+        if (new_cameras == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate memory for %d camera entries", connected_num);
+            camera_system.camera_count = 0;
+            camera_system.active_camera_count = 0;
             return;
         }
+
+        camera_system.cameras = new_cameras;
+        camera_system.allocated_camera_count = connected_num;
     }
+
     camera_system.camera_count = connected_num;
     camera_system.active_camera_count = 0;
+    memset(camera_system.cameras, 0, connected_num * sizeof(camera_t));
     for (int i = 0; i < connected_num; ++i) {
         if (app_uvc_get_dev_frame_info(i, &camera_system.cameras[i].info) == ESP_OK) {
             snprintf(camera_system.cameras[i].id, sizeof(camera_system.cameras[i].id), "%d", camera_system.cameras[i].info.index);

@@ -30,6 +30,15 @@
 #define UVC_DESC_DWFRAMEINTERVAL_TO_FPS(dwFrameInterval) (((dwFrameInterval) != 0) ? 10000000 / ((float)(dwFrameInterval)) : 0)
 
 static const char *TAG = "uvc";
+static const char *USB_MON_TAG = "usb_mon";
+
+#define USB_MONITOR_LOG_INTERVAL_MS               5000
+#define USB_MONITOR_MAX_EVENT_MSG                 5
+#define USB_MONITOR_CLASS_SPECIFIC_INTERFACE      0x24
+#define USB_VIDEO_SUBCLASS_CONTROL                0x01
+#define USB_VIDEO_SUBCLASS_STREAMING              0x02
+#define USB_VIDEO_SUBCLASS_INTERFACE_COLLECTION   0x03
+#define UVC_VS_DESC_SUBTYPE_FORMAT_MJPEG          0x06
 
 static const char *FORMAT_STR[] = {
     "FORMAT_UNDEFINED",
@@ -69,6 +78,217 @@ typedef struct {
 static uvc_dev_obj_t p_uvc_dev_obj = {0};
 
 static esp_err_t uvc_open(uvc_dev_t *dev, int frame_index);
+
+typedef struct {
+    uint8_t bLength;
+    uint8_t bDescriptorType;
+    uint8_t bDescriptorSubType;
+} __attribute__((packed)) usb_cs_intf_desc_t;
+
+typedef struct {
+    usb_host_client_handle_t client_hdl;
+    uint8_t pending_dev_addr;
+} usb_monitor_obj_t;
+
+static const char *usb_speed_to_str(usb_speed_t speed)
+{
+    switch (speed) {
+    case USB_SPEED_LOW:
+        return "low-speed";
+    case USB_SPEED_FULL:
+        return "full-speed";
+    case USB_SPEED_HIGH:
+        return "high-speed";
+    default:
+        return "unknown-speed";
+    }
+}
+
+static void usb_string_desc_to_ascii(const usb_str_desc_t *src, char *dst, size_t dst_len)
+{
+    if (dst_len == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (src == NULL || src->bLength <= 2) {
+        return;
+    }
+
+    size_t char_count = (src->bLength - 2) / sizeof(uint16_t);
+    size_t out_idx = 0;
+    for (size_t i = 0; i < char_count && out_idx + 1 < dst_len; i++) {
+        uint16_t ch = src->wData[i];
+        dst[out_idx++] = (ch >= 32 && ch <= 126) ? (char)ch : '?';
+    }
+    dst[out_idx] = '\0';
+}
+
+static void usb_log_device_summary(usb_host_client_handle_t client_hdl, uint8_t dev_addr)
+{
+    usb_device_handle_t dev_hdl = NULL;
+    esp_err_t err = usb_host_device_open(client_hdl, dev_addr, &dev_hdl);
+    if (err != ESP_OK) {
+        ESP_LOGW(USB_MON_TAG, "USB device addr=%d appeared, but open failed: %s", dev_addr, esp_err_to_name(err));
+        return;
+    }
+
+    usb_device_info_t dev_info = {0};
+    const usb_device_desc_t *dev_desc = NULL;
+    const usb_config_desc_t *config_desc = NULL;
+    err = usb_host_device_info(dev_hdl, &dev_info);
+    if (err != ESP_OK) {
+        ESP_LOGW(USB_MON_TAG, "usb_host_device_info failed for addr=%d: %s", dev_addr, esp_err_to_name(err));
+        goto cleanup;
+    }
+    err = usb_host_get_device_descriptor(dev_hdl, &dev_desc);
+    if (err != ESP_OK) {
+        ESP_LOGW(USB_MON_TAG, "usb_host_get_device_descriptor failed for addr=%d: %s", dev_addr, esp_err_to_name(err));
+        goto cleanup;
+    }
+    err = usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
+    if (err != ESP_OK) {
+        ESP_LOGW(USB_MON_TAG, "usb_host_get_active_config_descriptor failed for addr=%d: %s", dev_addr, esp_err_to_name(err));
+        goto cleanup;
+    }
+
+    char manufacturer[64];
+    char product[64];
+    char serial[64];
+    usb_string_desc_to_ascii(dev_info.str_desc_manufacturer, manufacturer, sizeof(manufacturer));
+    usb_string_desc_to_ascii(dev_info.str_desc_product, product, sizeof(product));
+    usb_string_desc_to_ascii(dev_info.str_desc_serial_num, serial, sizeof(serial));
+
+    ESP_LOGI(USB_MON_TAG,
+             "USB device enumerated on OTG: addr=%d vid=0x%04x pid=0x%04x speed=%s dev_class=0x%02x config=%d interfaces=%d product=\"%s\" manufacturer=\"%s\" serial=\"%s\"",
+             dev_addr,
+             dev_desc->idVendor,
+             dev_desc->idProduct,
+             usb_speed_to_str(dev_info.speed),
+             dev_desc->bDeviceClass,
+             dev_info.bConfigurationValue,
+             config_desc->bNumInterfaces,
+             product[0] ? product : "-",
+             manufacturer[0] ? manufacturer : "-",
+             serial[0] ? serial : "-");
+
+    bool has_hub = (dev_desc->bDeviceClass == USB_CLASS_HUB);
+    bool has_video_interface = (dev_desc->bDeviceClass == USB_CLASS_VIDEO);
+    bool has_uvc_control = false;
+    bool has_uvc_streaming = false;
+    bool has_mjpeg = false;
+
+    int offset = 0;
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *)config_desc;
+    while ((current_desc = usb_parse_next_descriptor(current_desc, config_desc->wTotalLength, &offset)) != NULL) {
+        if (current_desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+            const usb_intf_desc_t *intf_desc = (const usb_intf_desc_t *)current_desc;
+            ESP_LOGI(USB_MON_TAG,
+                     "  Interface #%d alt=%d class=0x%02x subclass=0x%02x protocol=0x%02x eps=%d",
+                     intf_desc->bInterfaceNumber,
+                     intf_desc->bAlternateSetting,
+                     intf_desc->bInterfaceClass,
+                     intf_desc->bInterfaceSubClass,
+                     intf_desc->bInterfaceProtocol,
+                     intf_desc->bNumEndpoints);
+            if (intf_desc->bInterfaceClass == USB_CLASS_HUB) {
+                has_hub = true;
+            }
+            if (intf_desc->bInterfaceClass == USB_CLASS_VIDEO) {
+                has_video_interface = true;
+                if (intf_desc->bInterfaceSubClass == USB_VIDEO_SUBCLASS_CONTROL) {
+                    has_uvc_control = true;
+                } else if (intf_desc->bInterfaceSubClass == USB_VIDEO_SUBCLASS_STREAMING) {
+                    has_uvc_streaming = true;
+                }
+            }
+        } else if (current_desc->bDescriptorType == USB_MONITOR_CLASS_SPECIFIC_INTERFACE && current_desc->bLength >= sizeof(usb_cs_intf_desc_t)) {
+            const usb_cs_intf_desc_t *cs_desc = (const usb_cs_intf_desc_t *)current_desc;
+            if (cs_desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_MJPEG) {
+                has_mjpeg = true;
+            }
+        }
+    }
+
+    if (has_hub && !has_video_interface) {
+        ESP_LOGW(USB_MON_TAG, "USB hub detected on OTG. Waiting for downstream devices from the hub.");
+    } else if (!has_video_interface) {
+        ESP_LOGW(USB_MON_TAG, "USB device is present on OTG, but it is not a UVC video device. This demo only works with UVC cameras.");
+    } else if (!has_uvc_control || !has_uvc_streaming) {
+        ESP_LOGW(USB_MON_TAG, "Video-class device detected, but its descriptors do not look like a complete UVC camera (control=%s streaming=%s).",
+                 has_uvc_control ? "yes" : "no",
+                 has_uvc_streaming ? "yes" : "no");
+    } else if (!has_mjpeg) {
+        ESP_LOGW(USB_MON_TAG, "UVC camera detected on OTG, but no MJPEG format descriptor was found. This demo lists MJPEG modes only.");
+    } else {
+        ESP_LOGI(USB_MON_TAG, "UVC camera with MJPEG support detected on OTG. The camera should appear in the web UI after the UVC driver finishes parsing.");
+    }
+
+cleanup:
+    err = usb_host_device_close(client_hdl, dev_hdl);
+    if (err != ESP_OK) {
+        ESP_LOGW(USB_MON_TAG, "usb_host_device_close failed for addr=%d: %s", dev_addr, esp_err_to_name(err));
+    }
+}
+
+static void usb_monitor_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
+{
+    usb_monitor_obj_t *monitor = (usb_monitor_obj_t *)arg;
+
+    switch (event_msg->event) {
+    case USB_HOST_CLIENT_EVENT_NEW_DEV:
+        monitor->pending_dev_addr = event_msg->new_dev.address;
+        break;
+    case USB_HOST_CLIENT_EVENT_DEV_GONE:
+        ESP_LOGW(USB_MON_TAG, "A USB device opened by monitor client was disconnected");
+        break;
+    default:
+        break;
+    }
+}
+
+static void usb_monitor_task(void *arg)
+{
+    usb_monitor_obj_t monitor = {0};
+    usb_host_client_config_t client_config = {
+        .is_synchronous = false,
+        .max_num_event_msg = USB_MONITOR_MAX_EVENT_MSG,
+        .async = {
+            .client_event_callback = usb_monitor_event_cb,
+            .callback_arg = &monitor,
+        },
+    };
+    ESP_ERROR_CHECK(usb_host_client_register(&client_config, &monitor.client_hdl));
+
+    TickType_t last_log_ticks = xTaskGetTickCount();
+    bool saw_any_device = false;
+    ESP_LOGI(USB_MON_TAG, "USB monitor ready. Waiting for devices on the board USB OTG port.");
+
+    while (true) {
+        esp_err_t err = usb_host_client_handle_events(monitor.client_hdl, pdMS_TO_TICKS(1000));
+        if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
+            ESP_LOGW(USB_MON_TAG, "usb_host_client_handle_events failed: %s", esp_err_to_name(err));
+        }
+
+        if (monitor.pending_dev_addr != 0) {
+            uint8_t dev_addr = monitor.pending_dev_addr;
+            monitor.pending_dev_addr = 0;
+            saw_any_device = true;
+            usb_log_device_summary(monitor.client_hdl, dev_addr);
+        }
+
+        TickType_t now = xTaskGetTickCount();
+        if ((now - last_log_ticks) >= pdMS_TO_TICKS(USB_MONITOR_LOG_INTERVAL_MS)) {
+            usb_host_lib_info_t lib_info = {0};
+            if (usb_host_lib_info(&lib_info) == ESP_OK && lib_info.num_devices == 0) {
+                ESP_LOGW(USB_MON_TAG,
+                         "No USB devices enumerated on OTG yet. Check the OTG port, USB cable, hub power, and whether the camera really exposes UVC over USB.");
+            } else if (!saw_any_device) {
+                ESP_LOGW(USB_MON_TAG, "USB host is running, but the monitor has not seen a complete device enumeration yet.");
+            }
+            last_log_ticks = now;
+        }
+    }
+}
 
 static void usb_lib_task(void *arg)
 {
@@ -327,6 +547,7 @@ esp_err_t app_uvc_init(void)
     BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), 15, NULL);
     assert(task_created == pdPASS);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    ESP_LOGI(TAG, "USB Host installed. Waiting for devices on USB OTG (GPIO49/GPIO50).");
 
     // UVC driver install
     const uvc_host_driver_config_t default_driver_config = {
@@ -337,6 +558,8 @@ esp_err_t app_uvc_init(void)
         .event_cb = driver_event_cb,
     };
     ESP_ERROR_CHECK(uvc_host_install(&default_driver_config));
+    task_created = xTaskCreate(usb_monitor_task, "usb_monitor", 4096, NULL, 4, NULL);
+    assert(task_created == pdPASS);
     return ESP_OK;
 }
 
