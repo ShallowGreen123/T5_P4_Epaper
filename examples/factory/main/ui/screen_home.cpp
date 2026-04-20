@@ -188,7 +188,7 @@ static void create_home(lv_obj_t *parent)
     lv_obj_align(s_status_label, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 84);
-    lv_obj_align(panel, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_align_to(panel, status_bar, LV_ALIGN_OUT_BOTTOM_MID, 0, 20);
     lv_obj_set_style_pad_bottom(panel, 72, LV_PART_MAIN);
 
     for (uint8_t page = 0; page < 2; ++page) {
