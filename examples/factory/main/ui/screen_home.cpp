@@ -1,5 +1,9 @@
 #include "ui_screens.h"
 
+#include <stdio.h>
+#include <time.h>
+
+#include "esp_timer.h"
 #include "factory_assets.h"
 #include "factory_port.h"
 #include "lvgl.h"
@@ -33,7 +37,50 @@ static lv_obj_t *s_pages[2] = {};
 static lv_obj_t *s_dots[2] = {};
 static lv_obj_t *s_prev_btn = nullptr;
 static lv_obj_t *s_next_btn = nullptr;
+static lv_obj_t *s_time_label = nullptr;
+static lv_obj_t *s_status_label = nullptr;
+static lv_timer_t *s_status_timer = nullptr;
 static uint8_t s_page_index = 0;
+
+static void format_status_time(char *buffer, size_t buffer_size)
+{
+    time_t now = time(nullptr);
+    struct tm timeinfo = {};
+    if (now > 0 && localtime_r(&now, &timeinfo) != nullptr && timeinfo.tm_year >= (2024 - 1900)) {
+        strftime(buffer, buffer_size, "%H:%M", &timeinfo);
+        return;
+    }
+
+    const uint64_t uptime_seconds = (uint64_t)(esp_timer_get_time() / 1000000ULL);
+    const uint32_t hours = (uint32_t)((uptime_seconds / 3600ULL) % 24ULL);
+    const uint32_t minutes = (uint32_t)((uptime_seconds / 60ULL) % 60ULL);
+    snprintf(buffer, buffer_size, "%02u:%02u", hours, minutes);
+}
+
+static void update_status_bar()
+{
+    const factory_runtime_info_t *runtime = factory_port_get_runtime_info();
+    char time_text[16];
+
+    format_status_time(time_text, sizeof(time_text));
+    if (s_time_label != nullptr) {
+        lv_label_set_text(s_time_label, time_text);
+    }
+    if (s_status_label != nullptr) {
+        lv_label_set_text_fmt(
+            s_status_label,
+            "%s --%%  %s off  TP %s",
+            LV_SYMBOL_BATTERY_FULL,
+            LV_SYMBOL_WIFI,
+            runtime->touch_ready ? "on" : "off");
+    }
+}
+
+static void status_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    update_status_bar();
+}
 
 static void apply_page_visibility()
 {
@@ -101,28 +148,47 @@ static void create_page_items(lv_obj_t *parent, uint8_t page)
             continue;
         }
 
-        lv_obj_t *tile = factory_ui_create_menu_tile(parent, kMenuItems[i].symbol, kMenuItems[i].title, menu_btn_event_cb, (void *)(intptr_t)kMenuItems[i].page_id);
-        lv_obj_set_size(tile, page == 0 ? lv_pct(31) : lv_pct(46), 150);
+        lv_obj_t *tile = factory_ui_create_menu_tile(
+            parent,
+            kMenuItems[i].symbol,
+            kMenuItems[i].title,
+            menu_btn_event_cb,
+            (void *)(intptr_t)kMenuItems[i].page_id);
+        lv_obj_set_size(tile, page == 0 ? lv_pct(31) : lv_pct(31), 150);
     }
 }
 
 static void create_home(lv_obj_t *parent)
 {
-    const factory_runtime_info_t *runtime = factory_port_get_runtime_info();
-
     factory_ui_apply_screen(parent);
 
-    lv_obj_t *badge = lv_img_create(parent);
-    lv_img_set_src(badge, &img_factory_badge);
-    lv_obj_align(badge, LV_ALIGN_TOP_LEFT, 34, 30);
+    lv_obj_t *status_bar = lv_obj_create(parent);
+    lv_obj_set_size(status_bar, lv_pct(100), 56);
+    lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(status_bar, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(status_bar, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_side(status_bar, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
+    lv_obj_set_style_border_color(status_bar, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_radius(status_bar, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(status_bar, 24, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(status_bar, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(status_bar, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *title = factory_ui_create_title(parent, "Factory");
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 74, 26);
+    s_time_label = lv_label_create(status_bar);
+    lv_obj_set_style_text_font(s_time_label, FACTORY_FONT_TITLE, LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_time_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_align(s_time_label, LV_ALIGN_LEFT_MID, 0, 0);
 
-    lv_obj_t *subtitle = factory_ui_create_subtitle(parent, "FastEPD 1bpp factory shell. Menu flow follows the demo layout while refresh speed stays prioritized.");
-    lv_obj_align(subtitle, LV_ALIGN_TOP_LEFT, 36, 74);
+    s_status_label = lv_label_create(status_bar);
+    lv_obj_set_style_text_font(s_status_label, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_status_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_align(s_status_label, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 76);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 84);
+    lv_obj_align(panel, LV_ALIGN_BOTTOM_MID, 0, -14);
     lv_obj_set_style_pad_bottom(panel, 72, LV_PART_MAIN);
 
     for (uint8_t page = 0; page < 2; ++page) {
@@ -134,7 +200,7 @@ static void create_home(lv_obj_t *parent)
         lv_obj_set_style_bg_opa(s_pages[page], LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_scrollbar_mode(s_pages[page], LV_SCROLLBAR_MODE_OFF);
         lv_obj_set_flex_flow(s_pages[page], LV_FLEX_FLOW_ROW_WRAP);
-        lv_obj_set_flex_align(s_pages[page], LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_set_flex_align(s_pages[page], LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
         lv_obj_set_style_pad_row(s_pages[page], 14, LV_PART_MAIN);
         lv_obj_set_style_pad_column(s_pages[page], 14, LV_PART_MAIN);
         create_page_items(s_pages[page], page);
@@ -170,17 +236,24 @@ static void create_home(lv_obj_t *parent)
         lv_obj_set_style_pad_all(s_dots[i], 0, LV_PART_MAIN);
     }
 
-    lv_obj_t *footer = lv_label_create(parent);
-    lv_label_set_text_fmt(footer, "%s | %ux%u | %s", runtime->target, runtime->width, runtime->height, runtime->touch_status);
-    lv_obj_set_style_text_color(footer, lv_palette_darken(LV_PALETTE_GREY, 2), LV_PART_MAIN);
-    lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, -8);
-
     s_page_index = 0;
+    update_status_bar();
     apply_page_visibility();
 }
 
-static void entry_home(void) {}
-static void exit_home(void) {}
+static void entry_home(void)
+{
+    update_status_bar();
+    s_status_timer = lv_timer_create(status_timer_cb, 1000, nullptr);
+}
+
+static void exit_home(void)
+{
+    if (s_status_timer != nullptr) {
+        lv_timer_del(s_status_timer);
+        s_status_timer = nullptr;
+    }
+}
 
 static void destroy_home(void)
 {
@@ -190,6 +263,8 @@ static void destroy_home(void)
     }
     s_prev_btn = nullptr;
     s_next_btn = nullptr;
+    s_time_label = nullptr;
+    s_status_label = nullptr;
     s_page_index = 0;
 }
 
