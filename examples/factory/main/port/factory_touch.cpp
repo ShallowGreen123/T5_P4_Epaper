@@ -1,7 +1,6 @@
 #include "factory_touch.h"
 
 #include <stdio.h>
-#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -21,7 +20,6 @@
 namespace {
 
 static const char *TAG = "factory_touch";
-static constexpr int kTouchReadTimeoutMs = 100;
 
 static esp_io_expander_handle_t s_io = nullptr;
 static esp_lcd_panel_io_handle_t s_touch_io = nullptr;
@@ -54,24 +52,52 @@ static bool map_touch_coordinates(uint16_t raw_x, uint16_t raw_y, int16_t *mappe
         return false;
     }
 
-    int32_t x = (FACTORY_BOARD_WIDTH - 1) - (int32_t)raw_y;
-    int32_t y = (int32_t)raw_x;
+    const factory_display_mode_info_t *info = factory_display_get_mode_info();
+    int32_t phys_x = FACTORY_BOARD_WIDTH - 1 - (int32_t)raw_y;
+    int32_t phys_y = (int32_t)raw_x;
+    int32_t lx = phys_x;
+    int32_t ly = phys_y;
 
-    if (x < 0) {
-        x = 0;
-    }
-    if (y < 0) {
-        y = 0;
-    }
-    if (x >= FACTORY_BOARD_WIDTH) {
-        x = FACTORY_BOARD_WIDTH - 1;
-    }
-    if (y >= FACTORY_BOARD_HEIGHT) {
-        y = FACTORY_BOARD_HEIGHT - 1;
+    switch (info->rotation_deg) {
+        case 90:
+            lx = phys_y;
+            ly = FACTORY_BOARD_WIDTH - 1 - phys_x;
+            break;
+        case 180:
+            lx = FACTORY_BOARD_WIDTH - 1 - phys_x;
+            ly = FACTORY_BOARD_HEIGHT - 1 - phys_y;
+            break;
+        case 270:
+            lx = FACTORY_BOARD_HEIGHT - 1 - phys_y;
+            ly = phys_x;
+            break;
+        case 0:
+        default:
+            break;
     }
 
-    *mapped_x = (int16_t)x;
-    *mapped_y = (int16_t)y;
+    if ((info->mirror_mode & 0x1U) != 0U) {
+        lx = (int32_t)info->width - 1 - lx;
+    }
+    if ((info->mirror_mode & 0x2U) != 0U) {
+        ly = (int32_t)info->height - 1 - ly;
+    }
+
+    if (lx < 0) {
+        lx = 0;
+    }
+    if (ly < 0) {
+        ly = 0;
+    }
+    if (lx >= info->width) {
+        lx = info->width - 1;
+    }
+    if (ly >= info->height) {
+        ly = info->height - 1;
+    }
+
+    *mapped_x = (int16_t)lx;
+    *mapped_y = (int16_t)ly;
     return true;
 }
 
@@ -170,6 +196,13 @@ static bool reset_gt911_for_selected_address()
 
     if (expander_set_pin(FACTORY_PCA_T_RST, true) != ESP_OK) {
         ESP_LOGW(TAG, "release GT911 reset failed");
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    int_gpio_config.mode = GPIO_MODE_INPUT;
+    if (gpio_config(&int_gpio_config) != ESP_OK) {
+        ESP_LOGW(TAG, "restore GT911 INT gpio failed");
         return false;
     }
     vTaskDelay(pdMS_TO_TICKS(50));

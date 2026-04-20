@@ -9,19 +9,28 @@ extern "C" {
 
 typedef enum factory_page_id {
     FACTORY_PAGE_HOME = 0,
+    FACTORY_PAGE_CLOCK,
+    FACTORY_PAGE_LORA,
+    FACTORY_PAGE_SD,
+    FACTORY_PAGE_SETTING,
+    FACTORY_PAGE_TEST,
+    FACTORY_PAGE_WIFI,
+    FACTORY_PAGE_BATTERY,
+    FACTORY_PAGE_GPS,
+    FACTORY_PAGE_ADJUST,
+    FACTORY_PAGE_SHUTDOWN,
+    FACTORY_PAGE_SLEEP,
     FACTORY_PAGE_DISPLAY,
     FACTORY_PAGE_TOUCH,
-    FACTORY_PAGE_BATTERY,
-    FACTORY_PAGE_WIFI,
-    FACTORY_PAGE_SD,
-    FACTORY_PAGE_GPS,
-    FACTORY_PAGE_LORA,
-    FACTORY_PAGE_DEVICE,
 } factory_page_id_t;
 
 typedef struct factory_display_mode_info {
     uint16_t width;
     uint16_t height;
+    uint16_t native_width;
+    uint16_t native_height;
+    uint16_t rotation_deg;
+    uint8_t mirror_mode;
     uint8_t partial_passes;
     uint8_t full_passes;
     const char *mode_name;
@@ -51,13 +60,13 @@ typedef struct factory_runtime_info {
     const char *boot_mode;
 } factory_runtime_info_t;
 
-typedef struct factory_placeholder_info {
+typedef struct factory_page_info {
     factory_page_id_t page_id;
     const char *title;
     const char *summary;
     const char *detail;
     const char *status_text;
-} factory_placeholder_info_t;
+} factory_page_info_t;
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -1,24 +1,16 @@
-file(GLOB FACTORY_ASSETS "asset/*.c")
+file(GLOB FACTORY_ASSETS "assets/*.c")
+file(GLOB FACTORY_UI "ui/*.cpp")
+file(GLOB FACTORY_PORT "port/*.cpp")
 
 idf_component_register(
     SRCS
         "main.cpp"
-        "scr_mrg.cpp"
-        "driver/factory_display.cpp"
-        "driver/factory_touch.cpp"
-        "port/factory_port.cpp"
-        "ui/ui.cpp"
-        "ui/ui_theme.cpp"
-        "ui/screen_home.cpp"
-        "ui/screen_display.cpp"
-        "ui/screen_touch.cpp"
-        "ui/screen_placeholder.cpp"
-        "ui/screen_device.cpp"
         ${FACTORY_ASSETS}
+        ${FACTORY_UI}
+        ${FACTORY_PORT}
     INCLUDE_DIRS
         "."
-        "asset"
-        "driver"
+        "assets"
         "port"
         "ui"
     REQUIRES

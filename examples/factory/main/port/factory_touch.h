@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "factory_types.h"
 
 #ifdef __cplusplus

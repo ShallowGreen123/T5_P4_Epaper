@@ -1,9 +1,6 @@
 #include "ui_screens.h"
 
-#include <stdio.h>
-
-#include "driver/board_config.h"
-#include "driver/factory_display.h"
+#include "factory_display.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 #include "ui_theme.h"
@@ -28,7 +25,16 @@ static void update_display_state()
     const int32_t x = 20 + (int32_t)((s_tick_count * 48U) % (uint32_t)span);
     const int32_t y = 26 + (int32_t)(((s_tick_count % 5U) * 36U));
 
-    lv_label_set_text_fmt(s_mode_label, "Mode: %s | Passes: partial %u / full %u", info->mode_name, info->partial_passes, info->full_passes);
+    lv_label_set_text_fmt(
+        s_mode_label,
+        "Mode: %s | %ux%u | rot %u | mirror %u | p%u/f%u",
+        info->mode_name,
+        info->width,
+        info->height,
+        info->rotation_deg,
+        info->mirror_mode,
+        info->partial_passes,
+        info->full_passes);
     lv_label_set_text_fmt(s_tick_label, "Partial update tick: %u", s_tick_count);
     lv_obj_set_pos(s_probe, x, y);
 
@@ -74,7 +80,7 @@ static void create_display(lv_obj_t *parent)
     s_refresh_label = factory_ui_create_info_label(panel, "Next automatic full refresh:");
 
     lv_obj_t *btn = factory_ui_create_action_button(panel, "Request Full Refresh", full_refresh_btn_event_cb, nullptr);
-    lv_obj_set_width(btn, 260);
+    lv_obj_set_width(btn, 320);
 
     s_stage = lv_obj_create(panel);
     lv_obj_set_width(s_stage, lv_pct(100));

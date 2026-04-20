@@ -7,7 +7,7 @@ namespace {
 
 static void create_placeholder_page(lv_obj_t *parent, factory_page_id_t page_id)
 {
-    const factory_placeholder_info_t *info = factory_port_get_placeholder_page(page_id);
+    const factory_page_info_t *info = factory_port_get_page_info(page_id);
     if (info == nullptr) {
         return;
     }
@@ -45,28 +45,36 @@ static void destroy_placeholder(void) {}
         .destroy = destroy_placeholder,                              \
     }
 
-FACTORY_PLACEHOLDER_LIFECYCLE(battery, FACTORY_PAGE_BATTERY);
-FACTORY_PLACEHOLDER_LIFECYCLE(wifi, FACTORY_PAGE_WIFI);
-FACTORY_PLACEHOLDER_LIFECYCLE(sd, FACTORY_PAGE_SD);
-FACTORY_PLACEHOLDER_LIFECYCLE(gps, FACTORY_PAGE_GPS);
+FACTORY_PLACEHOLDER_LIFECYCLE(clock, FACTORY_PAGE_CLOCK);
 FACTORY_PLACEHOLDER_LIFECYCLE(lora, FACTORY_PAGE_LORA);
-
+FACTORY_PLACEHOLDER_LIFECYCLE(sd, FACTORY_PAGE_SD);
+FACTORY_PLACEHOLDER_LIFECYCLE(wifi, FACTORY_PAGE_WIFI);
+FACTORY_PLACEHOLDER_LIFECYCLE(battery, FACTORY_PAGE_BATTERY);
+FACTORY_PLACEHOLDER_LIFECYCLE(gps, FACTORY_PAGE_GPS);
+FACTORY_PLACEHOLDER_LIFECYCLE(shutdown, FACTORY_PAGE_SHUTDOWN);
+FACTORY_PLACEHOLDER_LIFECYCLE(sleep, FACTORY_PAGE_SLEEP);
 
 }  // namespace
 
 extern "C" scr_lifecycle_t *factory_placeholder_lifecycle(factory_page_id_t page_id)
 {
     switch (page_id) {
-        case FACTORY_PAGE_BATTERY:
-            return &s_battery_lifecycle;
-        case FACTORY_PAGE_WIFI:
-            return &s_wifi_lifecycle;
-        case FACTORY_PAGE_SD:
-            return &s_sd_lifecycle;
-        case FACTORY_PAGE_GPS:
-            return &s_gps_lifecycle;
+        case FACTORY_PAGE_CLOCK:
+            return &s_clock_lifecycle;
         case FACTORY_PAGE_LORA:
             return &s_lora_lifecycle;
+        case FACTORY_PAGE_SD:
+            return &s_sd_lifecycle;
+        case FACTORY_PAGE_WIFI:
+            return &s_wifi_lifecycle;
+        case FACTORY_PAGE_BATTERY:
+            return &s_battery_lifecycle;
+        case FACTORY_PAGE_GPS:
+            return &s_gps_lifecycle;
+        case FACTORY_PAGE_SHUTDOWN:
+            return &s_shutdown_lifecycle;
+        case FACTORY_PAGE_SLEEP:
+            return &s_sleep_lifecycle;
         default:
             return nullptr;
     }

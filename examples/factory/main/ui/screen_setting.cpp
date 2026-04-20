@@ -7,12 +7,12 @@
 
 namespace {
 
-static void create_device(lv_obj_t *parent)
+static void create_setting(lv_obj_t *parent)
 {
     const factory_runtime_info_t *runtime = factory_port_get_runtime_info();
 
     factory_ui_apply_screen(parent);
-    factory_ui_create_back_button(parent, "Device");
+    factory_ui_create_back_button(parent, "Setting");
 
     lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 82);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
@@ -31,20 +31,20 @@ static void create_device(lv_obj_t *parent)
     lv_obj_set_width(factory_ui_create_value_card(panel, "Boot Target", runtime->boot_mode), lv_pct(100));
 }
 
-static void entry_device(void) {}
-static void exit_device(void) {}
-static void destroy_device(void) {}
+static void entry_setting(void) {}
+static void exit_setting(void) {}
+static void destroy_setting(void) {}
 
-static scr_lifecycle_t s_device_lifecycle = {
-    .create = create_device,
-    .entry = entry_device,
-    .exit = exit_device,
-    .destroy = destroy_device,
+static scr_lifecycle_t s_setting_lifecycle = {
+    .create = create_setting,
+    .entry = entry_setting,
+    .exit = exit_setting,
+    .destroy = destroy_setting,
 };
 
 }  // namespace
 
-extern "C" scr_lifecycle_t *factory_screen_device_lifecycle(void)
+extern "C" scr_lifecycle_t *factory_screen_setting_lifecycle(void)
 {
-    return &s_device_lifecycle;
+    return &s_setting_lifecycle;
 }

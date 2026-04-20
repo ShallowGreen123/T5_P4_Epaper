@@ -1,9 +1,7 @@
 #include "ui_screens.h"
 
-#include <stdio.h>
-
-#include "driver/factory_display.h"
-#include "driver/factory_touch.h"
+#include "factory_display.h"
+#include "factory_touch.h"
 #include "lvgl.h"
 #include "ui_theme.h"
 
