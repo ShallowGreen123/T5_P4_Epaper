@@ -23,11 +23,11 @@ extern "C" void factory_ui_init(void)
     scr_mgr_register(FACTORY_PAGE_DISPLAY, factory_screen_display_lifecycle());
     scr_mgr_register(FACTORY_PAGE_TOUCH, factory_screen_touch_lifecycle());
     scr_mgr_register(FACTORY_PAGE_ADJUST, factory_screen_adjust_lifecycle());
+    scr_mgr_register(FACTORY_PAGE_WIFI, factory_screen_wifi_lifecycle());
 
     scr_mgr_register(FACTORY_PAGE_CLOCK, factory_placeholder_lifecycle(FACTORY_PAGE_CLOCK));
     scr_mgr_register(FACTORY_PAGE_LORA, factory_placeholder_lifecycle(FACTORY_PAGE_LORA));
     scr_mgr_register(FACTORY_PAGE_SD, factory_placeholder_lifecycle(FACTORY_PAGE_SD));
-    scr_mgr_register(FACTORY_PAGE_WIFI, factory_placeholder_lifecycle(FACTORY_PAGE_WIFI));
     scr_mgr_register(FACTORY_PAGE_BATTERY, factory_placeholder_lifecycle(FACTORY_PAGE_BATTERY));
     scr_mgr_register(FACTORY_PAGE_GPS, factory_placeholder_lifecycle(FACTORY_PAGE_GPS));
     scr_mgr_register(FACTORY_PAGE_SHUTDOWN, factory_placeholder_lifecycle(FACTORY_PAGE_SHUTDOWN));
