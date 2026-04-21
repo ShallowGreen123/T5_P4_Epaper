@@ -15,4 +15,6 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/esp_lcd_touch_gt911: ^1.2.0~2
+  espressif/esp_hosted: ^2.12.3
+  espressif/esp_wifi_remote: ^1.5.0
   wngfra/esp_io_expander_pca9535: ^1.0.1

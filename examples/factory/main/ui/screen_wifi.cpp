@@ -10,16 +10,42 @@ namespace {
 static lv_obj_t *s_state_label = nullptr;
 static lv_obj_t *s_summary_label = nullptr;
 static lv_obj_t *s_scan_list = nullptr;
+static lv_obj_t *s_scan_btn = nullptr;
 static lv_obj_t *s_scan_btn_label = nullptr;
 static lv_timer_t *s_scan_timer = nullptr;
 
+static void refresh_scan_list();
+
 static void refresh_scan_button()
 {
-    if (s_scan_btn_label == nullptr) {
+    if (s_scan_btn == nullptr || s_scan_btn_label == nullptr) {
         return;
     }
 
-    lv_label_set_text(s_scan_btn_label, factory_wifi_scan_busy() ? "Scanning..." : "Rescan");
+    lv_label_set_text(
+        s_scan_btn_label,
+        factory_wifi_has_scan_started() ? "Rescan" : "Scan WiFi");
+
+    if (factory_wifi_scan_busy()) {
+        lv_obj_add_state(s_scan_btn, LV_STATE_DISABLED);
+    } else {
+        lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
+    }
+}
+
+static void scan_item_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || factory_wifi_scan_busy()) {
+        return;
+    }
+
+    const int index = (int)(intptr_t)lv_event_get_user_data(e);
+    factory_wifi_select_item(index);
+    refresh_scan_list();
+    refresh_scan_button();
+    if (s_summary_label != nullptr) {
+        lv_label_set_text(s_summary_label, factory_wifi_get_summary());
+    }
 }
 
 static void refresh_scan_list()
@@ -35,28 +61,35 @@ static void refresh_scan_list()
         lv_obj_t *empty = lv_label_create(s_scan_list);
         lv_obj_set_width(empty, lv_pct(100));
         lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
-        lv_label_set_text(empty, factory_wifi_scan_busy() ? "Scanning..." : "No scan results yet.");
+        lv_label_set_text(
+            empty,
+            factory_wifi_scan_busy()
+                ? "Scanning..."
+                : (factory_wifi_has_scan_started() ? "No scan results yet." : "Tap Scan WiFi to start one scan."));
         lv_obj_set_style_text_color(empty, lv_color_black(), LV_PART_MAIN);
         lv_obj_set_style_text_font(empty, FACTORY_FONT_UI_WIFI_SUMMARY, LV_PART_MAIN);
         return;
     }
 
+    const int selected_index = factory_wifi_get_selected_index();
     for (int i = 0; i < count; ++i) {
         lv_obj_t *item = lv_obj_class_create_obj(&lv_list_btn_class, s_scan_list);
         lv_obj_class_init_obj(item);
         lv_obj_set_size(item, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_set_height(item, 54);
-        lv_obj_set_style_bg_color(item, lv_color_white(), LV_PART_MAIN);
+        const bool selected = (i == selected_index);
+        lv_obj_set_style_bg_color(item, selected ? lv_color_black() : lv_color_white(), LV_PART_MAIN);
         lv_obj_set_style_border_color(item, lv_color_black(), LV_PART_MAIN);
         lv_obj_set_style_border_width(item, 2, LV_PART_MAIN);
         lv_obj_set_style_radius(item, 14, LV_PART_MAIN);
         lv_obj_set_style_shadow_width(item, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(item, scan_item_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
         lv_obj_t *label = lv_label_create(item);
         lv_obj_set_width(label, lv_pct(100));
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_label_set_text(label, factory_wifi_get_scan_item(i));
-        lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_text_color(label, selected ? lv_color_white() : lv_color_black(), LV_PART_MAIN);
         lv_obj_set_style_text_font(label, FACTORY_FONT_UI_WIFI_SUMMARY, LV_PART_MAIN);
         lv_obj_center(label);
     }
@@ -88,7 +121,9 @@ static void scan_btn_event_cb(lv_event_t *e)
         return;
     }
 
-    factory_wifi_scan_start();
+    if (!factory_wifi_scan_busy()) {
+        factory_wifi_scan_start();
+    }
     refresh_wifi_ui();
 }
 
@@ -134,18 +169,17 @@ static void create_wifi(lv_obj_t *parent)
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *scan_btn = factory_ui_create_action_button(btn_row, "Scan WiFi", scan_btn_event_cb, nullptr);
-    lv_obj_set_width(scan_btn, lv_pct(42));
-    s_scan_btn_label = lv_obj_get_child(scan_btn, 0);
+    s_scan_btn = factory_ui_create_action_button(btn_row, "Scan WiFi", scan_btn_event_cb, nullptr);
+    lv_obj_set_width(s_scan_btn, lv_pct(42));
+    s_scan_btn_label = lv_obj_get_child(s_scan_btn, 0);
 
     refresh_wifi_ui();
 }
 
 static void entry_wifi(void)
 {
-    factory_wifi_scan_start();
     refresh_wifi_ui();
-    s_scan_timer = lv_timer_create(scan_timer_cb, 5000, nullptr);
+    s_scan_timer = lv_timer_create(scan_timer_cb, 300, nullptr);
 }
 
 static void exit_wifi(void)
@@ -161,6 +195,7 @@ static void destroy_wifi(void)
     s_state_label = nullptr;
     s_summary_label = nullptr;
     s_scan_list = nullptr;
+    s_scan_btn = nullptr;
     s_scan_btn_label = nullptr;
 }
 

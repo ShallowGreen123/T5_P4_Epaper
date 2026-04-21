@@ -14,13 +14,17 @@ idf_component_register(
         "port"
         "ui"
     REQUIRES
+        esp_event
         esp_driver_gpio
         esp_driver_i2c
         esp_lcd
+        esp_netif
         esp_psram
         esp_timer
+        esp_wifi
         fastepd
         lvgl
+        nvs_flash
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
