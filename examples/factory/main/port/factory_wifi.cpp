@@ -19,6 +19,8 @@ enum FactoryWifiState {
     FACTORY_WIFI_STATE_IDLE = 0,
     FACTORY_WIFI_STATE_READY,
     FACTORY_WIFI_STATE_SCANNING,
+    FACTORY_WIFI_STATE_CONNECTING,
+    FACTORY_WIFI_STATE_CONNECTED,
     FACTORY_WIFI_STATE_DONE,
     FACTORY_WIFI_STATE_ERROR,
 };
@@ -26,6 +28,7 @@ enum FactoryWifiState {
 constexpr int kFactoryWifiMaxItems = 12;
 constexpr size_t kFactoryWifiLineLen = 96;
 constexpr size_t kFactoryWifiSsidLen = 33;
+constexpr size_t kFactoryWifiPasswordLen = 65;
 constexpr uint32_t kFactoryWifiScanTaskStack = 6144;
 
 static const char *TAG = "factory_wifi";
@@ -33,19 +36,33 @@ static const char *TAG = "factory_wifi";
 bool s_wifi_available = false;
 bool s_wifi_scan_started = false;
 bool s_wifi_scan_busy = false;
+bool s_wifi_connecting = false;
+bool s_wifi_connected = false;
+bool s_wifi_ignore_disconnect_once = false;
 FactoryWifiState s_wifi_state = FACTORY_WIFI_STATE_IDLE;
 int s_wifi_scan_count = 0;
 int s_wifi_scan_total_count = 0;
 int s_wifi_selected_index = -1;
 char s_wifi_state_text[64] = "WiFi idle";
 char s_wifi_summary[160] = "Tap Scan WiFi to scan nearby networks.";
+char s_wifi_connection_note[160] = "";
 char s_wifi_ssid[64] = "Not selected";
-char s_wifi_password[64] = "-";
+char s_wifi_password[kFactoryWifiPasswordLen] = "-";
 char s_wifi_ip[64] = "Not available";
 char s_wifi_lines[kFactoryWifiMaxItems][kFactoryWifiLineLen] = {};
 char s_wifi_ssids[kFactoryWifiMaxItems][kFactoryWifiSsidLen] = {};
+wifi_auth_mode_t s_wifi_auth_modes[kFactoryWifiMaxItems] = {};
+bool s_wifi_hidden[kFactoryWifiMaxItems] = {};
+char s_wifi_pending_password[kFactoryWifiPasswordLen] = "";
+char s_wifi_cached_ssid[kFactoryWifiSsidLen] = "";
+char s_wifi_cached_password[kFactoryWifiPasswordLen] = "";
 
 void refresh_summary();
+const char *get_display_ssid(int index);
+bool selected_network_is_open(void);
+bool has_cached_password_for_selected(void);
+bool selected_network_requires_password(void);
+bool start_connection_for_selected_item(const char *password);
 
 void copy_text(char *dst, size_t dst_size, const char *src)
 {
@@ -60,6 +77,8 @@ void clear_items()
     for (int i = 0; i < kFactoryWifiMaxItems; ++i) {
         s_wifi_lines[i][0] = '\0';
         s_wifi_ssids[i][0] = '\0';
+        s_wifi_auth_modes[i] = WIFI_AUTH_OPEN;
+        s_wifi_hidden[i] = false;
     }
     s_wifi_scan_count = 0;
     s_wifi_scan_total_count = 0;
@@ -97,6 +116,44 @@ const char *auth_mode_to_str(wifi_auth_mode_t auth_mode)
     }
 }
 
+const char *get_display_ssid(int index)
+{
+    if (index < 0 || index >= s_wifi_scan_count) {
+        return "Unknown";
+    }
+    return s_wifi_hidden[index] ? "<hidden>" : s_wifi_ssids[index];
+}
+
+bool selected_network_is_open(void)
+{
+    if (s_wifi_selected_index < 0 || s_wifi_selected_index >= s_wifi_scan_count) {
+        return false;
+    }
+
+    return s_wifi_auth_modes[s_wifi_selected_index] == WIFI_AUTH_OPEN ||
+           s_wifi_auth_modes[s_wifi_selected_index] == WIFI_AUTH_OWE;
+}
+
+bool has_cached_password_for_selected(void)
+{
+    if (s_wifi_selected_index < 0 || s_wifi_selected_index >= s_wifi_scan_count || s_wifi_hidden[s_wifi_selected_index] ||
+        selected_network_is_open()) {
+        return false;
+    }
+
+    return s_wifi_cached_password[0] != '\0' &&
+           strncmp(s_wifi_cached_ssid, s_wifi_ssids[s_wifi_selected_index], sizeof(s_wifi_cached_ssid)) == 0;
+}
+
+bool selected_network_requires_password(void)
+{
+    if (s_wifi_selected_index < 0 || s_wifi_selected_index >= s_wifi_scan_count || s_wifi_hidden[s_wifi_selected_index]) {
+        return false;
+    }
+
+    return !selected_network_is_open() && !has_cached_password_for_selected();
+}
+
 void refresh_summary()
 {
     if (!s_wifi_available) {
@@ -104,6 +161,11 @@ void refresh_summary()
             s_wifi_summary,
             sizeof(s_wifi_summary),
             "WiFi backend initialization failed. Check esp_hosted firmware on the onboard ESP32-C6.");
+        return;
+    }
+
+    if (s_wifi_connecting || s_wifi_connected || s_wifi_connection_note[0] != '\0') {
+        copy_text(s_wifi_summary, sizeof(s_wifi_summary), s_wifi_connection_note);
         return;
     }
 
@@ -126,6 +188,23 @@ void refresh_summary()
     }
 
     if (s_wifi_selected_index >= 0 && s_wifi_selected_index < s_wifi_scan_count) {
+        if (s_wifi_hidden[s_wifi_selected_index]) {
+            snprintf(
+                s_wifi_summary,
+                sizeof(s_wifi_summary),
+                "Selected hidden network. Manual SSID entry is not supported here.");
+            return;
+        }
+
+        if (selected_network_requires_password()) {
+            snprintf(
+                s_wifi_summary,
+                sizeof(s_wifi_summary),
+                "Selected: %s. Enter a password to connect.",
+                get_display_ssid(s_wifi_selected_index));
+            return;
+        }
+
         if (s_wifi_scan_total_count > s_wifi_scan_count) {
             snprintf(
                 s_wifi_summary,
@@ -133,14 +212,14 @@ void refresh_summary()
                 "Showing %d of %d WiFi network(s). Selected: %s",
                 s_wifi_scan_count,
                 s_wifi_scan_total_count,
-                s_wifi_ssids[s_wifi_selected_index]);
+                get_display_ssid(s_wifi_selected_index));
         } else {
             snprintf(
                 s_wifi_summary,
                 sizeof(s_wifi_summary),
                 "Found %d WiFi network(s). Selected: %s",
                 s_wifi_scan_count,
-                s_wifi_ssids[s_wifi_selected_index]);
+                get_display_ssid(s_wifi_selected_index));
         }
         return;
     }
@@ -187,6 +266,179 @@ esp_err_t ensure_event_loop_ready()
         return ESP_OK;
     }
     return ret;
+}
+
+void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    (void)arg;
+
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disconnected = (wifi_event_sta_disconnected_t *)event_data;
+
+        if (s_wifi_ignore_disconnect_once) {
+            s_wifi_ignore_disconnect_once = false;
+            return;
+        }
+
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+        set_state(FACTORY_WIFI_STATE_ERROR, "WiFi disconnected");
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+        s_wifi_pending_password[0] = '\0';
+
+        if (s_wifi_selected_index >= 0) {
+            snprintf(
+                s_wifi_connection_note,
+                sizeof(s_wifi_connection_note),
+                "Failed to connect to %s (reason %d).",
+                get_display_ssid(s_wifi_selected_index),
+                disconnected->reason);
+        } else {
+            snprintf(
+                s_wifi_connection_note,
+                sizeof(s_wifi_connection_note),
+                "WiFi disconnected (reason %d).",
+                disconnected->reason);
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+
+        s_wifi_connecting = false;
+        s_wifi_connected = true;
+        snprintf(s_wifi_ip, sizeof(s_wifi_ip), IPSTR, IP2STR(&event->ip_info.ip));
+        set_state(FACTORY_WIFI_STATE_CONNECTED, "WiFi connected");
+
+        if (s_wifi_selected_index >= 0) {
+            copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(s_wifi_selected_index));
+
+            if (!selected_network_is_open() && s_wifi_pending_password[0] != '\0') {
+                copy_text(s_wifi_cached_ssid, sizeof(s_wifi_cached_ssid), s_wifi_ssids[s_wifi_selected_index]);
+                copy_text(s_wifi_cached_password, sizeof(s_wifi_cached_password), s_wifi_pending_password);
+                copy_text(s_wifi_password, sizeof(s_wifi_password), "(cached)");
+            } else {
+                copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+            }
+
+            snprintf(
+                s_wifi_connection_note,
+                sizeof(s_wifi_connection_note),
+                "Connected to %s | IP %s",
+                get_display_ssid(s_wifi_selected_index),
+                s_wifi_ip);
+        } else {
+            snprintf(
+                s_wifi_connection_note,
+                sizeof(s_wifi_connection_note),
+                "WiFi connected | IP %s",
+                s_wifi_ip);
+        }
+
+        s_wifi_pending_password[0] = '\0';
+    }
+}
+
+bool start_connection_for_selected_item(const char *password)
+{
+    if (!s_wifi_available || s_wifi_selected_index < 0 || s_wifi_selected_index >= s_wifi_scan_count) {
+        return false;
+    }
+
+    if (s_wifi_hidden[s_wifi_selected_index]) {
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        set_state(FACTORY_WIFI_STATE_ERROR, "Hidden SSID");
+        snprintf(
+            s_wifi_connection_note,
+            sizeof(s_wifi_connection_note),
+            "Cannot connect to hidden SSID entry directly. Manual SSID entry is required.");
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+        refresh_summary();
+        return false;
+    }
+
+    const bool open_network = selected_network_is_open();
+    const char *connect_password = "";
+    if (!open_network && password != nullptr && password[0] != '\0') {
+        connect_password = password;
+    } else if (!open_network && has_cached_password_for_selected()) {
+        connect_password = s_wifi_cached_password;
+    }
+
+    if (!open_network && connect_password[0] == '\0') {
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        set_state(FACTORY_WIFI_STATE_ERROR, "Password required");
+        snprintf(
+            s_wifi_connection_note,
+            sizeof(s_wifi_connection_note),
+            "%s requires a password before connecting.",
+            get_display_ssid(s_wifi_selected_index));
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "(required)");
+        refresh_summary();
+        return false;
+    }
+
+    wifi_config_t wifi_cfg = {};
+    snprintf((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid), "%s", s_wifi_ssids[s_wifi_selected_index]);
+    snprintf((char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password), "%s", open_network ? "" : connect_password);
+    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+
+    esp_err_t ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    if (ret != ESP_OK) {
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        set_state(FACTORY_WIFI_STATE_ERROR, "WiFi config failed");
+        snprintf(
+            s_wifi_connection_note,
+            sizeof(s_wifi_connection_note),
+            "Failed to apply WiFi config for %s: %s",
+            get_display_ssid(s_wifi_selected_index),
+            esp_err_to_name(ret));
+        refresh_summary();
+        return false;
+    }
+
+    s_wifi_ignore_disconnect_once = true;
+    ret = esp_wifi_disconnect();
+    if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_CONNECT && ret != ESP_ERR_WIFI_CONN) {
+        ESP_LOGW(TAG, "esp_wifi_disconnect returned %s", esp_err_to_name(ret));
+        s_wifi_ignore_disconnect_once = false;
+    }
+
+    ret = esp_wifi_connect();
+    if (ret != ESP_OK) {
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        set_state(FACTORY_WIFI_STATE_ERROR, "WiFi connect failed");
+        s_wifi_pending_password[0] = '\0';
+        snprintf(
+            s_wifi_connection_note,
+            sizeof(s_wifi_connection_note),
+            "Failed to start connection to %s: %s",
+            get_display_ssid(s_wifi_selected_index),
+            esp_err_to_name(ret));
+        refresh_summary();
+        return false;
+    }
+
+    s_wifi_connecting = true;
+    s_wifi_connected = false;
+    set_state(FACTORY_WIFI_STATE_CONNECTING, "Connecting WiFi...");
+    copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(s_wifi_selected_index));
+    copy_text(s_wifi_pending_password, sizeof(s_wifi_pending_password), open_network ? "" : connect_password);
+    copy_text(
+        s_wifi_password,
+        sizeof(s_wifi_password),
+        open_network ? "-" : ((password != nullptr && password[0] != '\0') ? "(entered)" : "(cached)"));
+    copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    snprintf(
+        s_wifi_connection_note,
+        sizeof(s_wifi_connection_note),
+        "Connecting to %s...",
+        get_display_ssid(s_wifi_selected_index));
+    refresh_summary();
+    return true;
 }
 
 void wifi_scan_task(void *arg)
@@ -264,16 +516,18 @@ void wifi_scan_task(void *arg)
         s_wifi_scan_count = record_count > kFactoryWifiMaxItems ? kFactoryWifiMaxItems : (int)record_count;
         for (int i = 0; i < s_wifi_scan_count; ++i) {
             const wifi_ap_record_t *ap = &ap_records[i];
+            s_wifi_hidden[i] = (ap->ssid[0] == '\0');
+            s_wifi_auth_modes[i] = ap->authmode;
             snprintf(
                 s_wifi_ssids[i],
                 sizeof(s_wifi_ssids[i]),
                 "%s",
-                ap->ssid[0] != '\0' ? (const char *)ap->ssid : "<hidden>");
+                ap->ssid[0] != '\0' ? (const char *)ap->ssid : "");
             snprintf(
                 s_wifi_lines[i],
                 sizeof(s_wifi_lines[i]),
                 "%s | %ddBm | Ch%u | %s",
-                s_wifi_ssids[i],
+                s_wifi_hidden[i] ? "<hidden>" : s_wifi_ssids[i],
                 ap->rssi,
                 ap->primary,
                 auth_mode_to_str(ap->authmode));
@@ -297,11 +551,17 @@ void set_init_failed(const char *reason)
     s_wifi_available = false;
     s_wifi_scan_busy = false;
     s_wifi_scan_started = false;
+    s_wifi_connecting = false;
+    s_wifi_connected = false;
     clear_items();
     set_state(FACTORY_WIFI_STATE_ERROR, "WiFi unavailable");
+    copy_text(s_wifi_connection_note, sizeof(s_wifi_connection_note), reason);
     copy_text(s_wifi_summary, sizeof(s_wifi_summary), reason);
     copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
     copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    s_wifi_pending_password[0] = '\0';
+    s_wifi_cached_ssid[0] = '\0';
+    s_wifi_cached_password[0] = '\0';
 }
 
 void set_ready_state()
@@ -309,10 +569,16 @@ void set_ready_state()
     s_wifi_available = true;
     s_wifi_scan_busy = false;
     s_wifi_scan_started = false;
+    s_wifi_connecting = false;
+    s_wifi_connected = false;
     clear_items();
     set_state(FACTORY_WIFI_STATE_READY, "WiFi ready");
+    s_wifi_connection_note[0] = '\0';
     copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
     copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    s_wifi_pending_password[0] = '\0';
+    s_wifi_cached_ssid[0] = '\0';
+    s_wifi_cached_password[0] = '\0';
     refresh_summary();
 }
 
@@ -351,6 +617,24 @@ extern "C" void factory_wifi_init(void)
         return;
     }
 
+    ret = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, nullptr, nullptr);
+    if (ret != ESP_OK) {
+        set_init_failed("Failed to register WiFi event handler.");
+        return;
+    }
+
+    ret = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr, nullptr);
+    if (ret != ESP_OK) {
+        set_init_failed("Failed to register IP event handler.");
+        return;
+    }
+
+    ret = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (ret != ESP_OK) {
+        set_init_failed("esp_wifi_set_storage(WIFI_STORAGE_RAM) failed.");
+        return;
+    }
+
     ret = esp_wifi_set_mode(WIFI_MODE_STA);
     if (ret != ESP_OK) {
         set_init_failed("esp_wifi_set_mode(WIFI_MODE_STA) failed.");
@@ -368,12 +652,12 @@ extern "C" void factory_wifi_init(void)
 
 extern "C" bool factory_wifi_get_status(void)
 {
-    return s_wifi_available;
+    return s_wifi_connected;
 }
 
 extern "C" bool factory_wifi_scan_start(void)
 {
-    if (!s_wifi_available || s_wifi_scan_busy) {
+    if (!s_wifi_available || s_wifi_scan_busy || s_wifi_connecting) {
         refresh_summary();
         return false;
     }
@@ -381,6 +665,7 @@ extern "C" bool factory_wifi_scan_start(void)
     clear_items();
     s_wifi_scan_started = true;
     s_wifi_scan_busy = true;
+    s_wifi_connection_note[0] = '\0';
     set_state(FACTORY_WIFI_STATE_SCANNING, "Scanning WiFi...");
     refresh_summary();
 
@@ -411,9 +696,29 @@ extern "C" bool factory_wifi_scan_busy(void)
     return s_wifi_scan_busy;
 }
 
+extern "C" bool factory_wifi_is_connecting(void)
+{
+    return s_wifi_connecting;
+}
+
 extern "C" bool factory_wifi_has_scan_started(void)
 {
     return s_wifi_scan_started;
+}
+
+extern "C" bool factory_wifi_selected_requires_password(void)
+{
+    return selected_network_requires_password();
+}
+
+extern "C" bool factory_wifi_connect_selected(void)
+{
+    return start_connection_for_selected_item(nullptr);
+}
+
+extern "C" bool factory_wifi_connect_selected_with_password(const char *password)
+{
+    return start_connection_for_selected_item(password);
 }
 
 extern "C" const char *factory_wifi_get_state_text(void)
@@ -451,7 +756,15 @@ extern "C" void factory_wifi_select_item(int index)
     }
 
     s_wifi_selected_index = index;
-    copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), s_wifi_ssids[index]);
+    s_wifi_connection_note[0] = '\0';
+    copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(index));
+    if (s_wifi_hidden[index] || selected_network_is_open()) {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+    } else if (has_cached_password_for_selected()) {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "(cached)");
+    } else {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "(required)");
+    }
     refresh_summary();
 }
 
