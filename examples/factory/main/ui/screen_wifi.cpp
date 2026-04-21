@@ -37,7 +37,7 @@ static void refresh_scan_list()
         lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
         lv_label_set_text(empty, factory_wifi_scan_busy() ? "Scanning..." : "No scan results yet.");
         lv_obj_set_style_text_color(empty, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_text_font(empty, FACTORY_FONT_BODY, LV_PART_MAIN);
+        lv_obj_set_style_text_font(empty, FACTORY_FONT_UI_WIFI_SUMMARY, LV_PART_MAIN);
         return;
     }
 
@@ -57,7 +57,7 @@ static void refresh_scan_list()
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_label_set_text(label, factory_wifi_get_scan_item(i));
         lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_text_font(label, FACTORY_FONT_BODY, LV_PART_MAIN);
+        lv_obj_set_style_text_font(label, FACTORY_FONT_UI_WIFI_SUMMARY, LV_PART_MAIN);
         lv_obj_center(label);
     }
 }
@@ -97,7 +97,7 @@ static void create_wifi(lv_obj_t *parent)
     factory_ui_apply_screen(parent);
     factory_ui_create_back_button(parent, "WiFi");
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 82);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 92);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
@@ -105,7 +105,7 @@ static void create_wifi(lv_obj_t *parent)
     lv_obj_set_width(s_state_label, lv_pct(100));
     lv_label_set_long_mode(s_state_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_state_label, factory_wifi_get_state_text());
-    lv_obj_set_style_text_font(s_state_label, FACTORY_FONT_TITLE, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_state_label, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_state_label, lv_color_black(), LV_PART_MAIN);
 
     s_summary_label = factory_ui_create_info_label(panel, factory_wifi_get_summary());

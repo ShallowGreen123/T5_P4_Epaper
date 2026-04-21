@@ -182,7 +182,7 @@ static void create_home(lv_obj_t *parent)
     lv_obj_align(s_time_label, LV_ALIGN_LEFT_MID, 0, 0);
 
     s_status_label = lv_label_create(status_bar);
-    lv_obj_set_style_text_font(s_status_label, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_status_label, FACTORY_FONT_SYMBOL, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_status_label, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(s_status_label, LV_ALIGN_RIGHT_MID, 0, 0);

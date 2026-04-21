@@ -5,6 +5,46 @@
 
 namespace {
 
+constexpr lv_coord_t kBackButtonTop = 18;
+constexpr lv_coord_t kBackButtonHeight = 46;
+constexpr lv_coord_t kBackButtonBottom = kBackButtonTop + kBackButtonHeight;
+constexpr lv_coord_t kPanelTop = kBackButtonBottom + 30;
+
+static bool text_contains_lv_symbol(const char *text)
+{
+    if (text == nullptr) {
+        return false;
+    }
+
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p != '\0') {
+        if ((*p & 0xF0U) == 0xE0U && p[1] != '\0' && p[2] != '\0') {
+            const uint32_t codepoint = ((uint32_t)(p[0] & 0x0FU) << 12) |
+                                       ((uint32_t)(p[1] & 0x3FU) << 6) |
+                                       (uint32_t)(p[2] & 0x3FU);
+            if (codepoint >= 0xF000U && codepoint <= 0xF8FFU) {
+                return true;
+            }
+            p += 3;
+            continue;
+        }
+
+        if ((*p & 0xE0U) == 0xC0U && p[1] != '\0') {
+            p += 2;
+            continue;
+        }
+
+        if ((*p & 0xF8U) == 0xF0U && p[1] != '\0' && p[2] != '\0' && p[3] != '\0') {
+            p += 4;
+            continue;
+        }
+
+        ++p;
+    }
+
+    return false;
+}
+
 static void back_btn_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
@@ -47,7 +87,7 @@ extern "C" lv_obj_t *factory_ui_create_content_panel(lv_obj_t *parent, lv_coord_
 {
     lv_obj_t *panel = lv_obj_create(parent);
     lv_obj_set_size(panel, lv_pct(width_pct), lv_pct(height_pct));
-    lv_obj_align(panel, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, kPanelTop);
     lv_obj_set_style_bg_color(panel, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_border_color(panel, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_border_width(panel, 2, LV_PART_MAIN);
@@ -75,7 +115,10 @@ extern "C" lv_obj_t *factory_ui_create_action_button(lv_obj_t *parent, const cha
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_center(label);
-    lv_obj_set_style_text_font(label, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_font(
+        label,
+        text_contains_lv_symbol(text) ? FACTORY_FONT_SYMBOL : FACTORY_FONT_BODY,
+        LV_PART_MAIN);
     return btn;
 }
 
@@ -101,7 +144,7 @@ extern "C" lv_obj_t *factory_ui_create_menu_tile(lv_obj_t *parent, const char *s
 
     lv_obj_t *text = lv_label_create(btn);
     lv_label_set_text(text, title);
-    lv_obj_set_style_text_font(text, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_font(text, FACTORY_FONT_UI_HOME_TEXT, LV_PART_MAIN);
     lv_obj_set_style_text_color(text, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_text_align(text, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
@@ -112,12 +155,12 @@ extern "C" void factory_ui_create_back_button(lv_obj_t *parent, const char *titl
 {
     lv_obj_t *btn = factory_ui_create_action_button(parent, LV_SYMBOL_LEFT, back_btn_event_cb, nullptr);
     lv_obj_set_size(btn, 60, 46);
-    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 18, 18);
+    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 18, kBackButtonTop);
 
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, title);
     lv_obj_align_to(label, btn, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
-    lv_obj_set_style_text_font(label, FACTORY_FONT_TITLE, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, FACTORY_FONT_UI_HOME_TEXT, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
 }
 
