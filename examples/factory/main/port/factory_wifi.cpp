@@ -49,6 +49,7 @@ char s_wifi_connection_note[160] = "";
 char s_wifi_ssid[64] = "Not selected";
 char s_wifi_password[kFactoryWifiPasswordLen] = "-";
 char s_wifi_ip[64] = "Not available";
+char s_wifi_connected_ssid[kFactoryWifiSsidLen] = "";
 char s_wifi_lines[kFactoryWifiMaxItems][kFactoryWifiLineLen] = {};
 char s_wifi_ssids[kFactoryWifiMaxItems][kFactoryWifiSsidLen] = {};
 wifi_auth_mode_t s_wifi_auth_modes[kFactoryWifiMaxItems] = {};
@@ -59,6 +60,7 @@ char s_wifi_cached_password[kFactoryWifiPasswordLen] = "";
 
 void refresh_summary();
 const char *get_display_ssid(int index);
+int find_scan_index_by_ssid(const char *ssid);
 bool selected_network_is_open(void);
 bool has_cached_password_for_selected(void);
 bool selected_network_requires_password(void);
@@ -122,6 +124,22 @@ const char *get_display_ssid(int index)
         return "Unknown";
     }
     return s_wifi_hidden[index] ? "<hidden>" : s_wifi_ssids[index];
+}
+
+int find_scan_index_by_ssid(const char *ssid)
+{
+    if (ssid == nullptr || ssid[0] == '\0') {
+        return -1;
+    }
+
+    for (int i = 0; i < s_wifi_scan_count; ++i) {
+        if (!s_wifi_hidden[i] &&
+            strncmp(s_wifi_ssids[i], ssid, sizeof(s_wifi_ssids[i])) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 bool selected_network_is_open(void)
@@ -285,6 +303,7 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id
         copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
         set_state(FACTORY_WIFI_STATE_ERROR, "WiFi disconnected");
         copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+        s_wifi_connected_ssid[0] = '\0';
         s_wifi_pending_password[0] = '\0';
 
         if (s_wifi_selected_index >= 0) {
@@ -311,6 +330,7 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id
 
         if (s_wifi_selected_index >= 0) {
             copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(s_wifi_selected_index));
+            copy_text(s_wifi_connected_ssid, sizeof(s_wifi_connected_ssid), s_wifi_ssids[s_wifi_selected_index]);
 
             if (!selected_network_is_open() && s_wifi_pending_password[0] != '\0') {
                 copy_text(s_wifi_cached_ssid, sizeof(s_wifi_cached_ssid), s_wifi_ssids[s_wifi_selected_index]);
@@ -445,6 +465,14 @@ void wifi_scan_task(void *arg)
 {
     (void)arg;
 
+    const bool preserve_connection_state = s_wifi_connected;
+    char previous_selected_ssid[kFactoryWifiSsidLen] = "";
+    if (s_wifi_selected_index >= 0 &&
+        s_wifi_selected_index < s_wifi_scan_count &&
+        !s_wifi_hidden[s_wifi_selected_index]) {
+        copy_text(previous_selected_ssid, sizeof(previous_selected_ssid), s_wifi_ssids[s_wifi_selected_index]);
+    }
+
     wifi_scan_config_t scan_cfg = {};
     scan_cfg.show_hidden = true;
     scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
@@ -536,12 +564,28 @@ void wifi_scan_task(void *arg)
         clear_items();
     }
 
+    int restored_index = -1;
+    if (preserve_connection_state) {
+        restored_index = find_scan_index_by_ssid(s_wifi_connected_ssid);
+    }
+    if (restored_index < 0) {
+        restored_index = find_scan_index_by_ssid(previous_selected_ssid);
+    }
+    s_wifi_selected_index = restored_index;
+    if (restored_index >= 0 && !preserve_connection_state) {
+        copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(restored_index));
+    } else if (preserve_connection_state && s_wifi_connected_ssid[0] != '\0') {
+        copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), s_wifi_connected_ssid);
+    }
+
     if (ap_records != nullptr) {
         free(ap_records);
     }
 
     s_wifi_scan_busy = false;
-    set_state(FACTORY_WIFI_STATE_DONE, "WiFi scan complete");
+    if (!preserve_connection_state) {
+        set_state(FACTORY_WIFI_STATE_DONE, "WiFi scan complete");
+    }
     refresh_summary();
     vTaskDelete(nullptr);
 }
@@ -559,6 +603,7 @@ void set_init_failed(const char *reason)
     copy_text(s_wifi_summary, sizeof(s_wifi_summary), reason);
     copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
     copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    s_wifi_connected_ssid[0] = '\0';
     s_wifi_pending_password[0] = '\0';
     s_wifi_cached_ssid[0] = '\0';
     s_wifi_cached_password[0] = '\0';
@@ -576,6 +621,7 @@ void set_ready_state()
     s_wifi_connection_note[0] = '\0';
     copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
     copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    s_wifi_connected_ssid[0] = '\0';
     s_wifi_pending_password[0] = '\0';
     s_wifi_cached_ssid[0] = '\0';
     s_wifi_cached_password[0] = '\0';
@@ -662,11 +708,13 @@ extern "C" bool factory_wifi_scan_start(void)
         return false;
     }
 
-    clear_items();
     s_wifi_scan_started = true;
     s_wifi_scan_busy = true;
-    s_wifi_connection_note[0] = '\0';
-    set_state(FACTORY_WIFI_STATE_SCANNING, "Scanning WiFi...");
+    if (!s_wifi_connected) {
+        clear_items();
+        s_wifi_connection_note[0] = '\0';
+        set_state(FACTORY_WIFI_STATE_SCANNING, "Scanning WiFi...");
+    }
     refresh_summary();
 
     BaseType_t task_ok = xTaskCreate(

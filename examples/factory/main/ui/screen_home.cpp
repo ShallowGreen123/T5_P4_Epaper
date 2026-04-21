@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "factory_assets.h"
 #include "factory_port.h"
+#include "factory_wifi.h"
 #include "lvgl.h"
 #include "scr_mrg.h"
 #include "ui_theme.h"
@@ -60,6 +61,7 @@ static void format_status_time(char *buffer, size_t buffer_size)
 static void update_status_bar()
 {
     const factory_runtime_info_t *runtime = factory_port_get_runtime_info();
+    const char *wifi_status = factory_wifi_get_status() ? "on" : (factory_wifi_is_connecting() ? "..." : "off");
     char time_text[16];
 
     format_status_time(time_text, sizeof(time_text));
@@ -69,9 +71,10 @@ static void update_status_bar()
     if (s_status_label != nullptr) {
         lv_label_set_text_fmt(
             s_status_label,
-            "%s --%%  %s off  TP %s",
+            "%s --%%  %s %s  TP %s",
             LV_SYMBOL_BATTERY_FULL,
             LV_SYMBOL_WIFI,
+            wifi_status,
             runtime->touch_ready ? "on" : "off");
     }
 }

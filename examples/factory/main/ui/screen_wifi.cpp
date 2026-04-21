@@ -82,7 +82,7 @@ static void hide_password_prompt(bool clear_text)
 static void show_password_prompt()
 {
     if (s_password_overlay == nullptr || s_password_title == nullptr || s_password_hint == nullptr ||
-        s_password_textarea == nullptr || s_password_keyboard == nullptr) {
+        s_password_textarea == nullptr || s_password_keyboard == nullptr || s_password_card == nullptr) {
         return;
     }
 
@@ -94,6 +94,7 @@ static void show_password_prompt()
     lv_keyboard_set_textarea(s_password_keyboard, s_password_textarea);
     lv_obj_clear_flag(s_password_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_password_overlay);
+    lv_obj_align(s_password_card, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_state(s_password_textarea, LV_STATE_FOCUSED);
     refresh_scan_button();
 }
@@ -313,8 +314,8 @@ static void create_password_prompt(lv_obj_t *parent)
 {
     s_password_overlay = lv_obj_create(parent);
     lv_obj_set_size(s_password_overlay, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(s_password_overlay, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_password_overlay, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_password_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_password_overlay, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_password_overlay, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s_password_overlay, 0, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(s_password_overlay, 0, LV_PART_MAIN);
@@ -327,12 +328,12 @@ static void create_password_prompt(lv_obj_t *parent)
     lv_obj_align(s_password_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_border_width(s_password_keyboard, 0, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(s_password_keyboard, 0, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_password_keyboard, FACTORY_FONT_BODY, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(s_password_keyboard, LV_FONT_DEFAULT, LV_PART_ITEMS);
     lv_keyboard_set_mode(s_password_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
 
     s_password_card = lv_obj_create(s_password_overlay);
     lv_obj_set_size(s_password_card, lv_pct(90), LV_SIZE_CONTENT);
-    lv_obj_align_to(s_password_card, s_password_keyboard, LV_ALIGN_OUT_TOP_MID, 0, -12);
+    lv_obj_align(s_password_card, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_password_card, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_border_color(s_password_card, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_border_width(s_password_card, 2, LV_PART_MAIN);
