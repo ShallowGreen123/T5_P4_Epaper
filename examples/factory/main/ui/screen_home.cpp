@@ -190,7 +190,7 @@ static void create_home(lv_obj_t *parent)
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(s_status_label, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 84);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 92);
     lv_obj_align_to(panel, status_bar, LV_ALIGN_OUT_BOTTOM_MID, 0, 20);
     lv_obj_set_style_pad_bottom(panel, 72, LV_PART_MAIN);
 

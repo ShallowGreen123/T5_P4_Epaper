@@ -15,7 +15,7 @@ static void create_placeholder_page(lv_obj_t *parent, factory_page_id_t page_id)
     factory_ui_apply_screen(parent);
     factory_ui_create_back_button(parent, info->title);
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 82);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 92);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
@@ -52,7 +52,7 @@ FACTORY_PLACEHOLDER_LIFECYCLE(wifi, FACTORY_PAGE_WIFI);
 FACTORY_PLACEHOLDER_LIFECYCLE(battery, FACTORY_PAGE_BATTERY);
 FACTORY_PLACEHOLDER_LIFECYCLE(gps, FACTORY_PAGE_GPS);
 FACTORY_PLACEHOLDER_LIFECYCLE(shutdown, FACTORY_PAGE_SHUTDOWN);
-FACTORY_PLACEHOLDER_LIFECYCLE(sleep, FACTORY_PAGE_SLEEP);
+FACTORY_PLACEHOLDER_LIFECYCLE(sleep, FACTORY_PAGE_SLEEP); 
 
 }  // namespace
 
