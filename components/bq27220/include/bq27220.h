@@ -33,12 +33,12 @@ typedef union BatteryStatus {
         uint16_t OCVGD : 1;
         uint16_t TCA : 1;
         uint16_t RSVD : 1;
-        uint16_t CHGING : 1;
+        uint16_t CHGINH : 1;
         uint16_t FC : 1;
         uint16_t OTD : 1;
         uint16_t OTC : 1;
         uint16_t SLEEP : 1;
-        uint16_t OCVFALL : 1;
+        uint16_t OCVFAIL : 1;
         uint16_t OCVCOMP : 1;
         uint16_t FD : 1;
     } reg;

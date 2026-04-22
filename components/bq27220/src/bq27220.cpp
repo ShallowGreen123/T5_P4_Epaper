@@ -182,21 +182,21 @@ bool BQ27220::isReady(void) const
 
 bool BQ27220::getIsCharging(void)
 {
-    BQ27220BatteryStatus batt = {};
-    if (!getBatteryStatus(&batt)) {
+    BQ27220Snapshot snapshot = {};
+    if (!readSnapshot(&snapshot)) {
         return false;
     }
-    return !batt.reg.DSG;
+    return snapshot.charging;
 }
 
 bool BQ27220::getCharingFinish(void)
 {
-    BQ27220BatteryStatus batt = {};
-    if (!getBatteryStatus(&batt)) {
+    BQ27220Snapshot snapshot = {};
+    if (!readSnapshot(&snapshot)) {
         return false;
     }
 
-    return (!(batt.reg.DSG || getCurrent()));
+    return snapshot.full;
 }
 
 bool BQ27220::getChargingFinish(void)
@@ -821,9 +821,11 @@ bool BQ27220::readSnapshot(BQ27220Snapshot *snapshot)
     snapshot->current_ma = (int16_t)current_raw;
     snapshot->average_current_ma = (int16_t)average_current_raw;
     snapshot->soh_percent = (uint16_t)(state_of_health & 0x00FFu);
-    snapshot->charging =
-        snapshot->battery_status.reg.CHGING || (snapshot->average_current_ma > 0);
     snapshot->full = snapshot->battery_status.reg.FC || snapshot->gauging_status.reg.FC;
+    snapshot->charging =
+        !snapshot->full &&
+        !snapshot->battery_status.reg.CHGINH &&
+        ((snapshot->current_ma > 0) || (snapshot->average_current_ma > 0));
     return true;
 }
 

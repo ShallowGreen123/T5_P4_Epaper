@@ -12,20 +12,41 @@
 
 namespace {
 
-struct metric_card_t {
-    lv_obj_t *card;
-    lv_obj_t *value;
+enum : size_t {
+    GAUGE_LINE_VBUS = 0,
+    GAUGE_LINE_STATE,
+    GAUGE_LINE_SOC_FCC_SOH,
+    GAUGE_LINE_TEMP,
+    GAUGE_LINE_AVG_I,
+    GAUGE_LINE_VOLT,
+    GAUGE_LINE_CHG_V,
+    GAUGE_LINE_TAP_I,
+    GAUGE_LINE_FINISHED,
+    GAUGE_LINE_REM_FULL,
+    GAUGE_LINE_DBG,
+    GAUGE_LINE_COUNT,
+};
+
+enum : size_t {
+    CHARGER_LINE_VBUS = 0,
+    CHARGER_LINE_VBUS_MV,
+    CHARGER_LINE_VSYS_MV,
+    CHARGER_LINE_VBAT_MV,
+    CHARGER_LINE_VREG_MV,
+    CHARGER_LINE_ICHG_MA,
+    CHARGER_LINE_PRE_MA,
+    CHARGER_LINE_CHG_ADC_MA,
+    CHARGER_LINE_STATUS,
+    CHARGER_LINE_COUNT,
 };
 
 constexpr uint32_t kBatteryRefreshMs = CONFIG_FACTORY_BATTERY_REFRESH_MS;
-constexpr size_t kChargerMetricCount = 5;
-constexpr size_t kGaugeMetricCount = 5;
 
 static lv_obj_t *s_mode_label = nullptr;
 static lv_obj_t *s_summary_label = nullptr;
 static lv_timer_t *s_refresh_timer = nullptr;
-static metric_card_t s_charger_metrics[kChargerMetricCount] = {};
-static metric_card_t s_gauge_metrics[kGaugeMetricCount] = {};
+static lv_obj_t *s_gauge_lines[GAUGE_LINE_COUNT] = {};
+static lv_obj_t *s_charger_lines[CHARGER_LINE_COUNT] = {};
 
 static void style_transparent_container(lv_obj_t *obj)
 {
@@ -35,6 +56,19 @@ static void style_transparent_container(lv_obj_t *obj)
     lv_obj_set_style_pad_row(obj, 10, LV_PART_MAIN);
     lv_obj_set_style_pad_column(obj, 12, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+static void style_readout_panel(lv_obj_t *obj)
+{
+    lv_obj_set_style_bg_color(obj, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(obj, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(obj, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(obj, 14, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(obj, 14, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(obj, 6, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
@@ -51,13 +85,39 @@ static void set_text_if_changed(lv_obj_t *label, const char *text)
     }
 }
 
-static metric_card_t create_metric_card(lv_obj_t *parent, const char *title)
+static lv_obj_t *create_line_label(lv_obj_t *parent, const char *text)
 {
-    metric_card_t metric = {};
-    metric.card = factory_ui_create_value_card(parent, title, "--");
-    lv_obj_set_width(metric.card, lv_pct(100));
-    metric.value = lv_obj_get_child(metric.card, 1);
-    return metric;
+    lv_obj_t *label = lv_label_create(parent);
+    lv_obj_set_width(label, lv_pct(100));
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+    return label;
+}
+
+static lv_obj_t *create_readout_panel(lv_obj_t *parent,
+                                      const char *title,
+                                      lv_obj_t **lines,
+                                      size_t line_count)
+{
+    lv_obj_t *panel = lv_obj_create(parent);
+    lv_obj_set_width(panel, lv_pct(100));
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    style_readout_panel(panel);
+
+    lv_obj_t *title_label = lv_label_create(panel);
+    lv_label_set_text(title_label, title);
+    lv_obj_set_style_text_font(title_label, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title_label, lv_color_black(), LV_PART_MAIN);
+
+    for (size_t i = 0; i < line_count; ++i) {
+        lines[i] = create_line_label(panel, "--");
+    }
+
+    return panel;
 }
 
 static const char *primary_mode_text(const factory_battery_state_t *state)
@@ -85,17 +145,66 @@ static const char *primary_mode_text(const factory_battery_state_t *state)
     return "Unavailable";
 }
 
-static void set_metric_value(metric_card_t metric, const char *text)
+static void set_line_value(lv_obj_t *label, const char *text)
 {
-    if (metric.value == nullptr || text == nullptr) {
-        return;
-    }
-    set_text_if_changed(metric.value, text);
+    set_text_if_changed(label, text);
+}
+
+static void set_gauge_placeholder(const char *placeholder)
+{
+    char line[96];
+
+    std::snprintf(line, sizeof(line), "VBUS        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_VBUS], line);
+    std::snprintf(line, sizeof(line), "State       : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_STATE], line);
+    std::snprintf(line, sizeof(line), "SOC/FCC/SOH : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_SOC_FCC_SOH], line);
+    std::snprintf(line, sizeof(line), "Temp        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_TEMP], line);
+    std::snprintf(line, sizeof(line), "AvgI        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_AVG_I], line);
+    std::snprintf(line, sizeof(line), "Volt        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_VOLT], line);
+    std::snprintf(line, sizeof(line), "ChgV        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_CHG_V], line);
+    std::snprintf(line, sizeof(line), "TapI        : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_TAP_I], line);
+    std::snprintf(line, sizeof(line), "Finished    : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_FINISHED], line);
+    std::snprintf(line, sizeof(line), "Rem/Full    : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_REM_FULL], line);
+    std::snprintf(line, sizeof(line), "Dbg         : %s", placeholder);
+    set_line_value(s_gauge_lines[GAUGE_LINE_DBG], line);
+}
+
+static void set_charger_placeholder(const char *placeholder)
+{
+    char line[96];
+
+    std::snprintf(line, sizeof(line), "VBUS        : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_VBUS], line);
+    std::snprintf(line, sizeof(line), "VBUS mV     : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_VBUS_MV], line);
+    std::snprintf(line, sizeof(line), "VSYS        : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_VSYS_MV], line);
+    std::snprintf(line, sizeof(line), "VBAT        : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_VBAT_MV], line);
+    std::snprintf(line, sizeof(line), "VREG        : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_VREG_MV], line);
+    std::snprintf(line, sizeof(line), "ICHG        : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_ICHG_MA], line);
+    std::snprintf(line, sizeof(line), "PRE         : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_PRE_MA], line);
+    std::snprintf(line, sizeof(line), "CHG ADC     : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_CHG_ADC_MA], line);
+    std::snprintf(line, sizeof(line), "Status      : %s", placeholder);
+    set_line_value(s_charger_lines[CHARGER_LINE_STATUS], line);
 }
 
 static void refresh_battery_ui()
 {
-    char text[96];
+    char line[128];
     char temp_text[64];
 
     factory_battery_refresh();
@@ -105,96 +214,105 @@ static void refresh_battery_ui()
     set_text_if_changed(s_summary_label, factory_battery_get_status_text());
 
     if (state == nullptr) {
-        for (size_t i = 0; i < kChargerMetricCount; ++i) {
-            set_metric_value(s_charger_metrics[i], "--");
-        }
-        for (size_t i = 0; i < kGaugeMetricCount; ++i) {
-            set_metric_value(s_gauge_metrics[i], "--");
-        }
+        set_gauge_placeholder("--");
+        set_charger_placeholder("--");
         return;
     }
 
-    if (!state->charger_ready) {
-        for (size_t i = 0; i < kChargerMetricCount; ++i) {
-            set_metric_value(s_charger_metrics[i], "Not found");
-        }
-    } else if (!state->charger_read_ok) {
-        for (size_t i = 0; i < kChargerMetricCount; ++i) {
-            set_metric_value(s_charger_metrics[i], "Read error");
-        }
-    } else {
-        std::snprintf(text,
-                      sizeof(text),
-                      "%s | %u mV",
-                      state->vbus_connected ? "USB in" : "Battery",
-                      state->vbus_voltage_mv);
-        set_metric_value(s_charger_metrics[0], text);
-
-        std::snprintf(text,
-                      sizeof(text),
-                      "%s | %s",
-                      factory_battery_charge_status_name(state->charger_status),
-                      state->charge_enabled ? "enabled" : "disabled");
-        set_metric_value(s_charger_metrics[1], text);
-
-        std::snprintf(text,
-                      sizeof(text),
-                      "%u mA / %u mV",
-                      state->charge_current_ma,
-                      state->charge_voltage_mv);
-        set_metric_value(s_charger_metrics[2], text);
-
-        std::snprintf(text,
-                      sizeof(text),
-                      "IIN %u mA | VSYS %u mV",
-                      state->input_limit_ma,
-                      state->system_voltage_mv);
-        set_metric_value(s_charger_metrics[3], text);
-
-        std::snprintf(text,
-                      sizeof(text),
-                      "VBAT %u mV | Term %u mA",
-                      state->battery_voltage_mv,
-                      state->termination_current_ma);
-        set_metric_value(s_charger_metrics[4], text);
-    }
-
     if (!state->gauge_ready) {
-        for (size_t i = 0; i < kGaugeMetricCount; ++i) {
-            set_metric_value(s_gauge_metrics[i], "Not found");
-        }
+        set_gauge_placeholder("Not found");
     } else if (!state->gauge_read_ok) {
-        for (size_t i = 0; i < kGaugeMetricCount; ++i) {
-            set_metric_value(s_gauge_metrics[i], "Read error");
-        }
+        set_gauge_placeholder("Read error");
     } else {
-        std::snprintf(text,
-                      sizeof(text),
-                      "%s | 0x%04X",
-                      factory_battery_gauge_state_name(state->gauge_state),
-                      state->battery_status_raw);
-        set_metric_value(s_gauge_metrics[0], text);
+        std::snprintf(line, sizeof(line), "VBUS        : %s", state->vbus_connected ? "IN" : "OUT");
+        set_line_value(s_gauge_lines[GAUGE_LINE_VBUS], line);
 
-        std::snprintf(text, sizeof(text), "%u%% / %u%%", state->soc_percent, state->soh_percent);
-        set_metric_value(s_gauge_metrics[1], text);
+        std::snprintf(line,
+                      sizeof(line),
+                      "State       : %s",
+                      factory_battery_gauge_state_name(state->gauge_state));
+        set_line_value(s_gauge_lines[GAUGE_LINE_STATE], line);
 
-        std::snprintf(text,
-                      sizeof(text),
-                      "%d mA | avg %d mA",
-                      (int)state->current_ma,
-                      (int)state->average_current_ma);
-        set_metric_value(s_gauge_metrics[2], text);
-
-        std::snprintf(text,
-                      sizeof(text),
-                      "%u / %u mAh",
-                      state->remaining_capacity_mah,
-                      state->full_capacity_mah);
-        set_metric_value(s_gauge_metrics[3], text);
+        std::snprintf(line,
+                      sizeof(line),
+                      "SOC/FCC/SOH : %u%%/%u/%u%%",
+                      state->soc_percent,
+                      state->full_capacity_mah,
+                      state->soh_percent);
+        set_line_value(s_gauge_lines[GAUGE_LINE_SOC_FCC_SOH], line);
 
         factory_battery_format_temperature(temp_text, sizeof(temp_text), state->temperature_dk);
-        std::snprintf(text, sizeof(text), "%s | %u mV", temp_text, state->gauge_voltage_mv);
-        set_metric_value(s_gauge_metrics[4], text);
+        std::snprintf(line, sizeof(line), "Temp        : %s", temp_text);
+        set_line_value(s_gauge_lines[GAUGE_LINE_TEMP], line);
+
+        std::snprintf(line, sizeof(line), "AvgI        : %d mA", (int)state->average_current_ma);
+        set_line_value(s_gauge_lines[GAUGE_LINE_AVG_I], line);
+
+        std::snprintf(line, sizeof(line), "Volt        : %u mV", state->gauge_voltage_mv);
+        set_line_value(s_gauge_lines[GAUGE_LINE_VOLT], line);
+
+        std::snprintf(line, sizeof(line), "ChgV        : %u mV", state->gauge_charge_voltage_mv);
+        set_line_value(s_gauge_lines[GAUGE_LINE_CHG_V], line);
+
+        std::snprintf(line, sizeof(line), "TapI        : %u mA", state->gauge_taper_current_ma);
+        set_line_value(s_gauge_lines[GAUGE_LINE_TAP_I], line);
+
+        std::snprintf(line, sizeof(line), "Finished    : %s", state->charge_done ? "Yes" : "No");
+        set_line_value(s_gauge_lines[GAUGE_LINE_FINISHED], line);
+
+        std::snprintf(line,
+                      sizeof(line),
+                      "Rem/Full    : %u/%u mAh",
+                      state->remaining_capacity_mah,
+                      state->full_capacity_mah);
+        set_line_value(s_gauge_lines[GAUGE_LINE_REM_FULL], line);
+
+        std::snprintf(line,
+                      sizeof(line),
+                      "Dbg         : BFC=%u GFC=%u TCA=%u AI=%u V=%u",
+                      state->gauge_battery_full_flag ? 1u : 0u,
+                      state->gauge_gauging_full_flag ? 1u : 0u,
+                      state->gauge_taper_flag ? 1u : 0u,
+                      state->gauge_charge_inhibit ? 1u : 0u,
+                      state->gauge_voltage_mv);
+        set_line_value(s_gauge_lines[GAUGE_LINE_DBG], line);
+    }
+
+    if (!state->charger_ready) {
+        set_charger_placeholder("Not found");
+    } else if (!state->charger_read_ok) {
+        set_charger_placeholder("Read error");
+    } else {
+        std::snprintf(line, sizeof(line), "VBUS        : %s", state->vbus_connected ? "IN" : "OUT");
+        set_line_value(s_charger_lines[CHARGER_LINE_VBUS], line);
+
+        std::snprintf(line, sizeof(line), "VBUS mV     : %u mV", state->vbus_voltage_mv);
+        set_line_value(s_charger_lines[CHARGER_LINE_VBUS_MV], line);
+
+        std::snprintf(line, sizeof(line), "VSYS        : %u mV", state->system_voltage_mv);
+        set_line_value(s_charger_lines[CHARGER_LINE_VSYS_MV], line);
+
+        std::snprintf(line, sizeof(line), "VBAT        : %u mV", state->battery_voltage_mv);
+        set_line_value(s_charger_lines[CHARGER_LINE_VBAT_MV], line);
+
+        std::snprintf(line, sizeof(line), "VREG        : %u mV", state->charge_voltage_mv);
+        set_line_value(s_charger_lines[CHARGER_LINE_VREG_MV], line);
+
+        std::snprintf(line, sizeof(line), "ICHG        : %u mA", state->charge_current_ma);
+        set_line_value(s_charger_lines[CHARGER_LINE_ICHG_MA], line);
+
+        std::snprintf(line, sizeof(line), "PRE         : %u mA", state->precharge_current_ma);
+        set_line_value(s_charger_lines[CHARGER_LINE_PRE_MA], line);
+
+        std::snprintf(line, sizeof(line), "CHG ADC     : %u mA", state->charger_adc_current_ma);
+        set_line_value(s_charger_lines[CHARGER_LINE_CHG_ADC_MA], line);
+
+        std::snprintf(line,
+                      sizeof(line),
+                      "Status      : %s / %s",
+                      factory_battery_charge_status_name(state->charger_status),
+                      state->charge_enabled ? "Enabled" : "Disabled");
+        set_line_value(s_charger_lines[CHARGER_LINE_STATUS], line);
     }
 }
 
@@ -204,48 +322,8 @@ static void refresh_timer_cb(lv_timer_t *timer)
     refresh_battery_ui();
 }
 
-static lv_obj_t *create_metric_column(lv_obj_t *parent,
-                                      const char *title,
-                                      metric_card_t *metrics,
-                                      size_t metric_count,
-                                      const char *const *metric_titles)
-{
-    lv_obj_t *column = lv_obj_create(parent);
-    lv_obj_set_width(column, lv_pct(48));
-    lv_obj_set_flex_grow(column, 1);
-    style_transparent_container(column);
-    lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(column, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    lv_obj_t *title_label = lv_label_create(column);
-    lv_label_set_text(title_label, title);
-    lv_obj_set_style_text_font(title_label, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title_label, lv_color_black(), LV_PART_MAIN);
-
-    for (size_t i = 0; i < metric_count; ++i) {
-        metrics[i] = create_metric_card(column, metric_titles[i]);
-    }
-
-    return column;
-}
-
 static void create_battery(lv_obj_t *parent)
 {
-    static const char *kChargerMetricTitles[kChargerMetricCount] = {
-        "VBUS",
-        "Charge",
-        "Config",
-        "Input / System",
-        "Battery",
-    };
-    static const char *kGaugeMetricTitles[kGaugeMetricCount] = {
-        "State",
-        "SOC / SOH",
-        "Current",
-        "Capacity",
-        "Temperature",
-    };
-
     factory_ui_apply_screen(parent);
     factory_ui_create_back_button(parent, "Battery");
 
@@ -271,12 +349,14 @@ static void create_battery(lv_obj_t *parent)
     lv_obj_t *row = lv_obj_create(panel);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_flex_grow(row, 1);
-    style_transparent_container(row);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    style_transparent_container(row);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(row, LV_DIR_VER);
 
-    (void)create_metric_column(row, "Charger", s_charger_metrics, kChargerMetricCount, kChargerMetricTitles);
-    (void)create_metric_column(row, "Gauge", s_gauge_metrics, kGaugeMetricCount, kGaugeMetricTitles);
+    (void)create_readout_panel(row, "BQ27220", s_gauge_lines, GAUGE_LINE_COUNT);
+    (void)create_readout_panel(row, "BQ25896", s_charger_lines, CHARGER_LINE_COUNT);
 
     refresh_battery_ui();
 }
@@ -304,8 +384,8 @@ static void destroy_battery(void)
     s_mode_label = nullptr;
     s_summary_label = nullptr;
     s_refresh_timer = nullptr;
-    std::memset(s_charger_metrics, 0, sizeof(s_charger_metrics));
-    std::memset(s_gauge_metrics, 0, sizeof(s_gauge_metrics));
+    std::memset(s_gauge_lines, 0, sizeof(s_gauge_lines));
+    std::memset(s_charger_lines, 0, sizeof(s_charger_lines));
 }
 
 static scr_lifecycle_t s_battery_lifecycle = {

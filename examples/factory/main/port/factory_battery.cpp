@@ -17,6 +17,30 @@ namespace {
 
 constexpr char TAG[] = "factory_battery";
 
+struct battery_profile_t {
+    uint16_t input_limit_ma;
+    uint16_t capacity_mah;
+    uint16_t charge_current_ma;
+    uint16_t precharge_current_ma;
+    uint16_t termination_current_ma;
+    uint16_t charge_voltage_mv;
+    uint16_t term_voltage_delta_mv;
+    uint16_t system_min_mv;
+    int16_t current_threshold_ma;
+};
+
+constexpr battery_profile_t kBatteryProfile = {
+    .input_limit_ma = 1000u,
+    .capacity_mah = (uint16_t)CONFIG_FACTORY_BATTERY_CAPACITY_MAH,
+    .charge_current_ma = (uint16_t)CONFIG_FACTORY_BATTERY_CHARGE_CURRENT_MA,
+    .precharge_current_ma = (uint16_t)CONFIG_FACTORY_BATTERY_PRECHARGE_CURRENT_MA,
+    .termination_current_ma = (uint16_t)CONFIG_FACTORY_BATTERY_TERM_CURRENT_MA,
+    .charge_voltage_mv = (uint16_t)CONFIG_FACTORY_BATTERY_CHARGE_VOLTAGE_MV,
+    .term_voltage_delta_mv = (uint16_t)CONFIG_FACTORY_BATTERY_TERM_VOLTAGE_DELTA_MV,
+    .system_min_mv = (uint16_t)CONFIG_FACTORY_BATTERY_SYSTEM_MIN_MV,
+    .current_threshold_ma = (int16_t)CONFIG_FACTORY_BATTERY_CURRENT_THRESHOLD_MA,
+};
+
 static bq25896_hal_esp_idf_ctx_t s_bq25896_hal_ctx = {};
 static bq25896_t s_bq25896 = {};
 static BQ27220 s_bq27220;
@@ -124,12 +148,12 @@ static bool init_bq25896_device(i2c_master_bus_handle_t bus_handle)
 
     if (!bq25896_apply_step("disable_otg", bq25896_disable_otg(&s_bq25896)) ||
         !bq25896_apply_step("enable_battery_power_path", bq25896_enable_battery_power_path(&s_bq25896)) ||
-        !bq25896_apply_step("set_input_limit_ma", bq25896_set_input_limit_ma(&s_bq25896, 1000u)) ||
-        !bq25896_apply_step("set_charge_current_ma", bq25896_set_charge_current_ma(&s_bq25896, CONFIG_FACTORY_BATTERY_CHARGE_CURRENT_MA)) ||
-        !bq25896_apply_step("set_precharge_current_ma", bq25896_set_precharge_current_ma(&s_bq25896, CONFIG_FACTORY_BATTERY_PRECHARGE_CURRENT_MA)) ||
-        !bq25896_apply_step("set_termination_current_ma", bq25896_set_termination_current_ma(&s_bq25896, CONFIG_FACTORY_BATTERY_TERM_CURRENT_MA)) ||
-        !bq25896_apply_step("set_charge_voltage_mv", bq25896_set_charge_voltage_mv(&s_bq25896, CONFIG_FACTORY_BATTERY_CHARGE_VOLTAGE_MV)) ||
-        !bq25896_apply_step("set_system_min_voltage_mv", bq25896_set_system_min_voltage_mv(&s_bq25896, CONFIG_FACTORY_BATTERY_SYSTEM_MIN_MV)) ||
+        !bq25896_apply_step("set_input_limit_ma", bq25896_set_input_limit_ma(&s_bq25896, kBatteryProfile.input_limit_ma)) ||
+        !bq25896_apply_step("set_charge_current_ma", bq25896_set_charge_current_ma(&s_bq25896, kBatteryProfile.charge_current_ma)) ||
+        !bq25896_apply_step("set_precharge_current_ma", bq25896_set_precharge_current_ma(&s_bq25896, kBatteryProfile.precharge_current_ma)) ||
+        !bq25896_apply_step("set_termination_current_ma", bq25896_set_termination_current_ma(&s_bq25896, kBatteryProfile.termination_current_ma)) ||
+        !bq25896_apply_step("set_charge_voltage_mv", bq25896_set_charge_voltage_mv(&s_bq25896, kBatteryProfile.charge_voltage_mv)) ||
+        !bq25896_apply_step("set_system_min_voltage_mv", bq25896_set_system_min_voltage_mv(&s_bq25896, kBatteryProfile.system_min_mv)) ||
         !bq25896_apply_step("enable_charge", bq25896_enable_charge(&s_bq25896))) {
         (void)bq25896_hal_esp_idf_ctx_deinit(&s_bq25896_hal_ctx);
         std::memset(&s_bq25896, 0, sizeof(s_bq25896));
@@ -150,16 +174,16 @@ static bool init_bq27220_device(i2c_master_bus_handle_t bus_handle)
         return false;
     }
 
-    if (!s_bq27220.setDefaultCapacity(CONFIG_FACTORY_BATTERY_CAPACITY_MAH)) {
+    if (!s_bq27220.setDefaultCapacity(kBatteryProfile.capacity_mah)) {
         ESP_LOGE(TAG, "BQ27220 setDefaultCapacity failed");
         s_bq27220.end();
         return false;
     }
 
-    if (!s_bq27220.setChargeParameters(CONFIG_FACTORY_BATTERY_CHARGE_CURRENT_MA,
-                                       CONFIG_FACTORY_BATTERY_CHARGE_VOLTAGE_MV,
-                                       CONFIG_FACTORY_BATTERY_TERM_CURRENT_MA,
-                                       CONFIG_FACTORY_BATTERY_TERM_VOLTAGE_DELTA_MV)) {
+    if (!s_bq27220.setChargeParameters(kBatteryProfile.charge_current_ma,
+                                       kBatteryProfile.charge_voltage_mv,
+                                       kBatteryProfile.termination_current_ma,
+                                       kBatteryProfile.term_voltage_delta_mv)) {
         ESP_LOGE(TAG, "BQ27220 setChargeParameters failed");
         s_bq27220.end();
         return false;
@@ -257,6 +281,8 @@ extern "C" void factory_battery_refresh(void)
     s_state.bus_ready = factory_display_get_i2c_bus() != nullptr;
     s_state.charger_ready = s_bq25896_ready;
     s_state.gauge_ready = s_bq27220_ready;
+    s_state.gauge_charge_voltage_mv = kBatteryProfile.charge_voltage_mv;
+    s_state.gauge_taper_current_ma = kBatteryProfile.termination_current_ma;
 
     bq25896_status_t charger_status = {};
     bq25896_adc_t charger_adc = {};
@@ -275,15 +301,19 @@ extern "C" void factory_battery_refresh(void)
             s_state.vbus_connected = charger_status.vbus_good || charger_status.power_good;
             s_state.charge_enabled = charger_cfg.charge_enabled;
             s_state.charge_done = charger_status.charge_status == BQ25896_CHARGE_STATUS_TERMINATION_DONE;
+            s_state.charger_vbus_status = (uint8_t)charger_status.vbus_status;
             s_state.charger_status = (uint8_t)charger_status.charge_status;
             s_state.input_limit_ma = charger_status.input_limit_ma;
             s_state.charge_current_ma = charger_cfg.charge_current_ma;
             s_state.precharge_current_ma = charger_cfg.precharge_current_ma;
             s_state.termination_current_ma = charger_cfg.termination_current_ma;
+            s_state.charger_adc_current_ma = charger_adc.charge_current_ma;
             s_state.charge_voltage_mv = charger_cfg.charge_voltage_mv;
             s_state.system_voltage_mv = charger_adc.system_voltage_mv;
             s_state.battery_voltage_mv = charger_adc.battery_voltage_mv;
             s_state.vbus_voltage_mv = charger_adc.vbus_voltage_mv;
+            s_state.gauge_charge_voltage_mv = charger_cfg.charge_voltage_mv;
+            s_state.gauge_taper_current_ma = charger_cfg.termination_current_ma;
         }
     }
 
@@ -294,9 +324,13 @@ extern "C" void factory_battery_refresh(void)
             s_state.gauge_state =
                 (uint8_t)BQ27220::classifyState(&gauge,
                                                 inferred_vbus,
-                                                (int16_t)CONFIG_FACTORY_BATTERY_CURRENT_THRESHOLD_MA);
+                                                kBatteryProfile.current_threshold_ma);
             s_state.charging = gauge.charging;
-            s_state.charge_done = s_state.charge_done || gauge.full;
+            s_state.charge_done = s_state.charge_done || gauge.full || gauge.battery_status.reg.TCA;
+            s_state.gauge_battery_full_flag = gauge.battery_status.reg.FC;
+            s_state.gauge_gauging_full_flag = gauge.gauging_status.reg.FC;
+            s_state.gauge_taper_flag = gauge.battery_status.reg.TCA;
+            s_state.gauge_charge_inhibit = gauge.battery_status.reg.CHGINH;
             s_state.gauge_voltage_mv = gauge.voltage_mv;
             s_state.current_ma = gauge.current_ma;
             s_state.average_current_ma = gauge.average_current_ma;
@@ -306,6 +340,7 @@ extern "C" void factory_battery_refresh(void)
             s_state.remaining_capacity_mah = gauge.remaining_capacity_mah;
             s_state.temperature_dk = gauge.temperature_dk;
             s_state.battery_status_raw = gauge.battery_status.full;
+            s_state.gauging_status_raw = gauge.gauging_status.full;
             if (!s_state.charger_ready) {
                 s_state.vbus_connected = inferred_vbus;
             }
@@ -376,7 +411,7 @@ extern "C" void factory_battery_format_temperature(char *buffer, size_t buffer_s
 
     std::snprintf(buffer,
                   buffer_size,
-                  "%s%" PRId32 ".%" PRId32 " C",
+                  "%s%" PRId32 ".%" PRId32 " degC",
                   (temp_deci_c < 0) ? "-" : "",
                   abs_deci_c / 10,
                   abs_deci_c % 10);
