@@ -26,6 +26,8 @@ idf_component_register(
         esp_wifi
         fatfs
         fastepd
+        bq25896
+        bq27220
         lvgl
         nvs_flash
         sdmmc

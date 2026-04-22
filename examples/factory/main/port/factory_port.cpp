@@ -1,5 +1,6 @@
 #include "factory_port.h"
 
+#include "factory_battery.h"
 #include "factory_display.h"
 #include "factory_touch.h"
 #include "factory_wifi.h"
@@ -11,7 +12,7 @@ static const factory_page_info_t kPageInfo[] = {
     {FACTORY_PAGE_LORA, "LoRa", "Reserved for radio bring-up and loopback testing.", "LoRa transport is intentionally stubbed so the menu skeleton stays stable while the port layer remains thin.", "NOT_IMPLEMENTED"},
     {FACTORY_PAGE_SD, "SD Card", "Browse the SD card from /sdcard and inspect file details.", "This build mounts the card on demand, lists the current directory, and lets you inspect files without modifying card contents.", "READ_ONLY"},
     {FACTORY_PAGE_WIFI, "WiFi", "FastEPD WiFi scan UI is live with a stubbed backend.", "The layout and refresh loop were migrated from the demo, while actual networking is still disabled in this factory build.", "UI_ONLY"},
-    {FACTORY_PAGE_BATTERY, "Battery", "Reserved for BQ25896/BQ27220 integration.", "Power IC access is not enabled yet, so the page currently reports placeholder state only.", "PLACEHOLDER"},
+    {FACTORY_PAGE_BATTERY, "Battery", "Basic BQ25896/BQ27220 charging and gauge telemetry.", "The factory battery page reuses the power dashboard bring-up path, but trims the UI down to essential VBUS, charge state, SOC, current, voltage, temperature, and capacity data.", "LIVE_BASIC"},
     {FACTORY_PAGE_GPS, "GPS", "Reserved for GNSS lock and serial diagnostics.", "This page preserves the demo navigation slot without starting any GNSS task.", "NOT_IMPLEMENTED"},
     {FACTORY_PAGE_SHUTDOWN, "Shutdown", "Safe placeholder for a future power-off flow.", "Real shutdown is intentionally disabled in this migration build.", "SAFE_PLACEHOLDER"},
     {FACTORY_PAGE_SLEEP, "Sleep", "Safe placeholder for a future deep-sleep flow.", "Real sleep entry is intentionally disabled in this migration build.", "SAFE_PLACEHOLDER"},
@@ -55,6 +56,7 @@ static void refresh_runtime_info()
 extern "C" void factory_port_init(void)
 {
     factory_wifi_init();
+    factory_battery_init();
     refresh_runtime_info();
 }
 

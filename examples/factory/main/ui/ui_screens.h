@@ -15,6 +15,7 @@ scr_lifecycle_t *factory_screen_touch_lifecycle(void);
 scr_lifecycle_t *factory_screen_adjust_lifecycle(void);
 scr_lifecycle_t *factory_screen_wifi_lifecycle(void);
 scr_lifecycle_t *factory_screen_sd_lifecycle(void);
+scr_lifecycle_t *factory_screen_battery_lifecycle(void);
 scr_lifecycle_t *factory_placeholder_lifecycle(factory_page_id_t page_id);
 
 #ifdef __cplusplus

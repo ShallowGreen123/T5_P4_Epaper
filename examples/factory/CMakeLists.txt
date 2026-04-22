@@ -7,6 +7,8 @@ endif()
 list(APPEND EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../../components/fastepd"
     "${CMAKE_CURRENT_LIST_DIR}/../../components/lvgl"
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/bq25896"
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/bq27220"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

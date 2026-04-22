@@ -30,6 +30,61 @@ config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
     default 30000
     range 1000 600000
 
+config FACTORY_BATTERY_BQ25896_ADDR
+    hex "BQ25896 7-bit I2C address"
+    default 0x6B
+    range 0x00 0x7F
+
+config FACTORY_BATTERY_BQ27220_ADDR
+    hex "BQ27220 7-bit I2C address"
+    default 0x55
+    range 0x00 0x7F
+
+config FACTORY_BATTERY_REFRESH_MS
+    int "Battery page refresh period (ms)"
+    default 2000
+    range 500 60000
+
+config FACTORY_BATTERY_CAPACITY_MAH
+    int "Battery design capacity (mAh)"
+    default 1100
+    range 100 5000
+
+config FACTORY_BATTERY_CHARGE_CURRENT_MA
+    int "Battery fast charge current (mA)"
+    default 512
+    range 0 1000
+
+config FACTORY_BATTERY_PRECHARGE_CURRENT_MA
+    int "Battery precharge current (mA)"
+    default 64
+    range 0 1000
+
+config FACTORY_BATTERY_TERM_CURRENT_MA
+    int "Battery termination current (mA)"
+    default 64
+    range 0 1000
+
+config FACTORY_BATTERY_CHARGE_VOLTAGE_MV
+    int "Battery charge voltage (mV)"
+    default 4208
+    range 3000 4600
+
+config FACTORY_BATTERY_TERM_VOLTAGE_DELTA_MV
+    int "Battery charge termination voltage delta (mV)"
+    default 100
+    range 0 1000
+
+config FACTORY_BATTERY_SYSTEM_MIN_MV
+    int "Battery minimum system voltage (mV)"
+    default 3300
+    range 2500 3700
+
+config FACTORY_BATTERY_CURRENT_THRESHOLD_MA
+    int "Battery state threshold current (mA)"
+    default 20
+    range 0 500
+
 config FACTORY_BOOT_TOUCH_DIAGNOSTICS
     bool "Boot directly into the touch diagnostics page"
     default n
