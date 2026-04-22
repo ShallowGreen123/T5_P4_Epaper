@@ -85,6 +85,21 @@ config FACTORY_BATTERY_CURRENT_THRESHOLD_MA
     default 20
     range 0 500
 
+config FACTORY_BATTERY_LOW_VOLTAGE_MV
+    int "Battery low-voltage protection threshold (mV)"
+    default 3300
+    range 2500 4000
+
+config FACTORY_BATTERY_LOW_POWER_COUNTDOWN_SEC
+    int "Battery low-voltage shutdown countdown (s)"
+    default 20
+    range 1 120
+
+config FACTORY_BATTERY_LOW_POWER_POLL_MS
+    int "Battery low-voltage monitor polling period (ms)"
+    default 250
+    range 100 5000
+
 config FACTORY_BOOT_TOUCH_DIAGNOSTICS
     bool "Boot directly into the touch diagnostics page"
     default n
