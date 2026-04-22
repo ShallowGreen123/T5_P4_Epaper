@@ -1,6 +1,6 @@
 dependencies:
   espressif/eppp_link:
-    component_hash: 9472e6825f4bb71eca2b39cf1bc92659c1ac60bfd7416560ad033a7dd8641b17
+    component_hash: 04f7f31868b8ae6014c96132740a192d09611a6e46aaa7038c865ffc7e26b38f
     dependencies:
     - name: espressif/esp_serial_slave_link
       registry_url: https://components.espressif.com
@@ -12,9 +12,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.4
+    version: 1.1.5
   espressif/esp_hosted:
-    component_hash: c58660cb12491c4b6f3f07806596542ee1e152fb88cd7f5bb7d35059c2b64f57
+    component_hash: e23eb702781c804a62909e5394da0641a2bff9adccec6673a7bff60ce8c8b756
     dependencies:
     - name: idf
       require: private
@@ -22,7 +22,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.12.4
+    version: 2.12.3
   espressif/esp_io_expander:
     component_hash: 7b7f91270172e46ca4597e3874f48d8412e280e8c295559f5922ec38656e3e5f
     dependencies:
@@ -125,6 +125,6 @@ direct_dependencies:
 - espressif/esp_wifi_remote
 - idf
 - wngfra/esp_io_expander_pca9535
-manifest_hash: d851667de59f9ec12f1c38c927461d034ab4f9dcc8f8b26ab8955beade87f286
+manifest_hash: 594f882374dfb45f5763993ab6d7e03f00dd159933f78f315eed9301dc69c466
 target: esp32p4
 version: 2.0.0
