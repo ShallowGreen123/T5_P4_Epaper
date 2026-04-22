@@ -9,7 +9,7 @@ namespace {
 static const factory_page_info_t kPageInfo[] = {
     {FACTORY_PAGE_CLOCK, "Clock", "Reserved for RTC and wall-clock bring-up.", "This page keeps the FastEPD demo entry but does not enable RTC logic in this factory build.", "PLACEHOLDER"},
     {FACTORY_PAGE_LORA, "LoRa", "Reserved for radio bring-up and loopback testing.", "LoRa transport is intentionally stubbed so the menu skeleton stays stable while the port layer remains thin.", "NOT_IMPLEMENTED"},
-    {FACTORY_PAGE_SD, "SD Card", "Reserved for SD card mount and read/write diagnostics.", "The page is ready for a future storage probe, but this build keeps it as a lightweight placeholder.", "NOT_IMPLEMENTED"},
+    {FACTORY_PAGE_SD, "SD Card", "Browse the SD card from /sdcard and inspect file details.", "This build mounts the card on demand, lists the current directory, and lets you inspect files without modifying card contents.", "READ_ONLY"},
     {FACTORY_PAGE_WIFI, "WiFi", "FastEPD WiFi scan UI is live with a stubbed backend.", "The layout and refresh loop were migrated from the demo, while actual networking is still disabled in this factory build.", "UI_ONLY"},
     {FACTORY_PAGE_BATTERY, "Battery", "Reserved for BQ25896/BQ27220 integration.", "Power IC access is not enabled yet, so the page currently reports placeholder state only.", "PLACEHOLDER"},
     {FACTORY_PAGE_GPS, "GPS", "Reserved for GNSS lock and serial diagnostics.", "This page preserves the demo navigation slot without starting any GNSS task.", "NOT_IMPLEMENTED"},

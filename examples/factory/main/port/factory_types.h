@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -23,6 +24,12 @@ typedef enum factory_page_id {
     FACTORY_PAGE_DISPLAY,
     FACTORY_PAGE_TOUCH,
 } factory_page_id_t;
+
+#define FACTORY_SD_MAX_ENTRIES 64
+#define FACTORY_SD_MAX_NAME_LEN 128
+#define FACTORY_SD_MAX_PATH_LEN 256
+#define FACTORY_SD_MAX_TYPE_LEN 16
+#define FACTORY_SD_MAX_STATUS_LEN 160
 
 typedef struct factory_display_mode_info {
     uint16_t width;
@@ -67,6 +74,22 @@ typedef struct factory_page_info {
     const char *detail;
     const char *status_text;
 } factory_page_info_t;
+
+typedef struct factory_sd_state {
+    bool mounted;
+    bool at_root;
+    uint16_t entry_count;
+    char current_path[FACTORY_SD_MAX_PATH_LEN];
+    char status_text[FACTORY_SD_MAX_STATUS_LEN];
+} factory_sd_state_t;
+
+typedef struct factory_sd_entry_info {
+    bool is_directory;
+    uint64_t size_bytes;
+    char name[FACTORY_SD_MAX_NAME_LEN];
+    char path[FACTORY_SD_MAX_PATH_LEN];
+    char type[FACTORY_SD_MAX_TYPE_LEN];
+} factory_sd_entry_info_t;
 
 #ifdef __cplusplus
 }  // extern "C"
