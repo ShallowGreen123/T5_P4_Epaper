@@ -18,15 +18,36 @@ static const char *TAG = "factory_display";
 
 constexpr int kDrawBufPixels = FACTORY_BOARD_WIDTH * FACTORY_DRAW_BUF_LINES;
 constexpr int kFramebufferPitch = (FACTORY_BOARD_WIDTH + 7) / 8;
+constexpr uint8_t kMinMaxPartialRefreshesBeforeFull = 5;
+constexpr uint8_t kMaxMaxPartialRefreshesBeforeFull = 30;
+constexpr uint8_t kMaxPartialRefreshesStep = 5;
+// In runtime, prefer a low-flash whole-screen rewrite after a modest number of
+// partial updates. This follows the fastEPD_lvgl_demo pattern: the first
+// refresh performs a deep clear, later full-screen refreshes rewrite the panel
+// without an extra black/white clear cycle so we can suppress ghosting from
+// earlier partial updates without turning every maintenance refresh into a
+// visible flash.
+constexpr uint8_t kDefaultMaxPartialRefreshesBeforeFull = 15;
+constexpr int kInitialFullRefreshMode = CLEAR_SLOW;
+constexpr int kRuntimeFullRefreshMode = CLEAR_FAST;
+constexpr uint8_t kBayer4[4][4] = {
+    {0, 8, 2, 10},
+    {12, 4, 14, 6},
+    {3, 11, 1, 9},
+    {15, 7, 13, 5},
+};
 
 static FASTEPD s_epaper;
 static lv_color_t *s_draw_buf_1 = nullptr;
 static lv_color_t *s_draw_buf_2 = nullptr;
 static uint8_t *s_framebuffer = nullptr;
+static bool s_enable_dither = false;
 static bool s_force_full_refresh = true;
 static bool s_display_started = false;
 static int s_pending_y_min = FACTORY_BOARD_HEIGHT;
 static int s_pending_y_max = -1;
+static uint32_t s_partial_refresh_count = 0;
+static uint8_t s_max_partial_refreshes_before_full = kDefaultMaxPartialRefreshesBeforeFull;
 static i2c_master_bus_handle_t s_i2c_bus = nullptr;
 static lv_disp_drv_t s_disp_drv;
 static lv_disp_t *s_disp = nullptr;
@@ -54,9 +75,29 @@ static uint16_t normalize_rotation(uint16_t rotation_deg)
     return rotation_deg;
 }
 
+static uint8_t normalize_max_partial_refreshes_before_full(uint8_t count)
+{
+    if (count < kMinMaxPartialRefreshesBeforeFull) {
+        count = kMinMaxPartialRefreshesBeforeFull;
+    }
+    if (count > kMaxMaxPartialRefreshesBeforeFull) {
+        count = kMaxMaxPartialRefreshesBeforeFull;
+    }
+
+    count = (uint8_t)(((count + (kMaxPartialRefreshesStep / 2U)) / kMaxPartialRefreshesStep) * kMaxPartialRefreshesStep);
+    if (count < kMinMaxPartialRefreshesBeforeFull) {
+        count = kMinMaxPartialRefreshesBeforeFull;
+    }
+    if (count > kMaxMaxPartialRefreshesBeforeFull) {
+        count = kMaxMaxPartialRefreshesBeforeFull;
+    }
+    return count;
+}
+
 static void update_mode_summary()
 {
     const char *mirror_text = "normal";
+    const char *dither_text = s_enable_dither ? "dth" : "mono";
     switch (s_mode_info.mirror_mode & 0x3U) {
         case 1:
             mirror_text = "mirror-x";
@@ -81,11 +122,13 @@ static void update_mode_summary()
     snprintf(
         s_mode_summary,
         sizeof(s_mode_summary),
-        "1bpp partial refresh | rot %u | %s | p%u/f%u",
+        "1bpp partial refresh | rot %u | %s | %s | p%u/f%u | auto %u",
         s_mode_info.rotation_deg,
         mirror_text,
+        dither_text,
         s_mode_info.partial_passes,
-        s_mode_info.full_passes);
+        s_mode_info.full_passes,
+        (unsigned)s_max_partial_refreshes_before_full);
 }
 
 static void begin_flush()
@@ -106,12 +149,17 @@ static void note_flush_rows(int y1, int y2)
 
 static void flush_to_panel()
 {
-    if (s_force_full_refresh || !s_display_started) {
-        s_epaper.fullUpdate(CLEAR_SLOW, true);
+    const bool auto_full_refresh = s_partial_refresh_count >= s_max_partial_refreshes_before_full;
+
+    if (s_force_full_refresh || !s_display_started || auto_full_refresh) {
+        const int clear_mode = s_display_started ? kRuntimeFullRefreshMode : kInitialFullRefreshMode;
+        s_epaper.fullUpdate(clear_mode, true);
         s_force_full_refresh = false;
         s_display_started = true;
+        s_partial_refresh_count = 0;
     } else if (s_pending_y_min >= 0 && s_pending_y_max >= s_pending_y_min) {
         s_epaper.partialUpdate(true, s_pending_y_min, s_pending_y_max);
+        s_partial_refresh_count++;
     }
     begin_flush();
 }
@@ -203,7 +251,6 @@ static void disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_
             const uint8_t green_8 = (uint8_t)((green << 2) | (green >> 4));
             const uint8_t blue_8 = (uint8_t)((blue << 3) | (blue >> 2));
             const uint16_t gray = (uint16_t)(((red_8 * 76) + (green_8 * 150) + (blue_8 * 30)) >> 8);
-            const bool is_white = gray >= 128;
 
             int32_t panel_x = 0;
             int32_t panel_y = 0;
@@ -211,6 +258,14 @@ static void disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_
 
             if (panel_x < 0 || panel_x >= FACTORY_BOARD_WIDTH || panel_y < 0 || panel_y >= FACTORY_BOARD_HEIGHT) {
                 continue;
+            }
+
+            bool is_white = false;
+            if (s_enable_dither) {
+                const uint8_t threshold = (uint8_t)(kBayer4[panel_y & 0x3][panel_x & 0x3] * 16U);
+                is_white = gray >= threshold;
+            } else {
+                is_white = gray >= 128;
             }
 
             uint8_t &dst = s_framebuffer[(panel_y * kFramebufferPitch) + (panel_x >> 3)];
@@ -415,4 +470,36 @@ extern "C" void factory_display_set_passes(uint8_t partial_passes, uint8_t full_
     s_epaper.setPasses(partial_passes, full_passes);
     update_mode_summary();
     factory_display_request_full_refresh();
+}
+
+extern "C" void factory_display_set_dither(bool enable)
+{
+    if (s_enable_dither == enable) {
+        return;
+    }
+
+    s_enable_dither = enable;
+    update_mode_summary();
+    factory_display_request_full_refresh();
+}
+
+extern "C" bool factory_display_get_dither(void)
+{
+    return s_enable_dither;
+}
+
+extern "C" void factory_display_set_max_partial_refreshes_before_full(uint8_t count)
+{
+    const uint8_t normalized = normalize_max_partial_refreshes_before_full(count);
+    if (s_max_partial_refreshes_before_full == normalized) {
+        return;
+    }
+
+    s_max_partial_refreshes_before_full = normalized;
+    update_mode_summary();
+}
+
+extern "C" uint8_t factory_display_get_max_partial_refreshes_before_full(void)
+{
+    return s_max_partial_refreshes_before_full;
 }

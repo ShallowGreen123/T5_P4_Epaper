@@ -1,5 +1,8 @@
 #include "ui.h"
 
+#include <stdio.h>
+#include <string.h>
+
 #include "sdkconfig.h"
 #include "factory_battery.h"
 #include "factory_types.h"
@@ -25,6 +28,18 @@ static bool s_low_power_active = false;
 static uint32_t s_low_power_started_at_ms = 0U;
 
 static void refresh_low_power_protection();
+
+static void set_text_if_changed(lv_obj_t *label, const char *text)
+{
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+
+    const char *current = lv_label_get_text(label);
+    if (current == nullptr || strcmp(current, text) != 0) {
+        lv_label_set_text(label, text);
+    }
+}
 
 static bool low_power_popup_visible()
 {
@@ -58,8 +73,11 @@ static void update_low_power_popup(uint32_t remaining_ms)
     }
 
     const uint32_t remaining_seconds = (remaining_ms + 999U) / 1000U;
-    lv_label_set_text(s_low_power_message, "Low battery. Please charge now.");
-    lv_label_set_text_fmt(s_low_power_countdown, "Automatic shutdown in %u s.", remaining_seconds);
+    char countdown_text[48];
+
+    set_text_if_changed(s_low_power_message, "Low battery. Please charge now.");
+    snprintf(countdown_text, sizeof(countdown_text), "Automatic shutdown in %u s.", remaining_seconds);
+    set_text_if_changed(s_low_power_countdown, countdown_text);
 }
 
 static void start_low_power_countdown()

@@ -1,10 +1,12 @@
 #include "ui_screens.h"
 
+#include <string.h>
 #include <stdio.h>
 #include <time.h>
 
 #include "esp_timer.h"
 #include "factory_assets.h"
+#include "factory_battery.h"
 #include "factory_port.h"
 #include "factory_wifi.h"
 #include "lvgl.h"
@@ -43,6 +45,18 @@ static lv_obj_t *s_status_label = nullptr;
 static lv_timer_t *s_status_timer = nullptr;
 static uint8_t s_page_index = 0;
 
+static void set_text_if_changed(lv_obj_t *label, const char *text)
+{
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+
+    const char *current = lv_label_get_text(label);
+    if (current == nullptr || strcmp(current, text) != 0) {
+        lv_label_set_text(label, text);
+    }
+}
+
 static void format_status_time(char *buffer, size_t buffer_size)
 {
     time_t now = time(nullptr);
@@ -61,21 +75,42 @@ static void format_status_time(char *buffer, size_t buffer_size)
 static void update_status_bar()
 {
     const factory_runtime_info_t *runtime = factory_port_get_runtime_info();
+    const factory_battery_state_t *battery = factory_battery_get_state();
     const char *wifi_status = factory_wifi_get_status() ? "on" : (factory_wifi_is_connecting() ? "..." : "off");
     char time_text[16];
+    char battery_text[8];
+    char charge_text[8];
+    char status_text[64];
+    const char *charge_gap = "";
 
     format_status_time(time_text, sizeof(time_text));
+    if (battery != nullptr && battery->gauge_ready && battery->gauge_read_ok) {
+        snprintf(battery_text, sizeof(battery_text), "%u%%", battery->soc_percent);
+    } else {
+        snprintf(battery_text, sizeof(battery_text), "--%%");
+    }
+    if (battery != nullptr && battery->vbus_connected) {
+        snprintf(charge_text, sizeof(charge_text), "%s", LV_SYMBOL_CHARGE);
+        charge_gap = " ";
+    } else {
+        charge_text[0] = '\0';
+    }
+
     if (s_time_label != nullptr) {
-        lv_label_set_text(s_time_label, time_text);
+        set_text_if_changed(s_time_label, time_text);
     }
     if (s_status_label != nullptr) {
-        lv_label_set_text_fmt(
-            s_status_label,
-            "%s --%%  %s %s  TP %s",
-            LV_SYMBOL_BATTERY_FULL,
-            LV_SYMBOL_WIFI,
-            wifi_status,
-            runtime->touch_ready ? "on" : "off");
+        snprintf(status_text,
+                 sizeof(status_text),
+                 "%s %s%s%s  %s %s  TP %s",
+                 LV_SYMBOL_BATTERY_FULL,
+                 battery_text,
+                 charge_gap,
+                 charge_text,
+                 LV_SYMBOL_WIFI,
+                 wifi_status,
+                 runtime->touch_ready ? "on" : "off");
+        set_text_if_changed(s_status_label, status_text);
     }
 }
 
