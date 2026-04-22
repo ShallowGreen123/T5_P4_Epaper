@@ -7,6 +7,7 @@
 
 #include "factory_assets.h"
 #include "factory_battery.h"
+#include "factory_display.h"
 #include "lvgl.h"
 #include "ui_theme.h"
 
@@ -41,12 +42,23 @@ enum : size_t {
 };
 
 constexpr uint32_t kBatteryRefreshMs = CONFIG_FACTORY_BATTERY_REFRESH_MS;
+constexpr uint32_t kShutdownDelayMs = 2500;
 
+static lv_obj_t *s_root = nullptr;
 static lv_obj_t *s_mode_label = nullptr;
 static lv_obj_t *s_summary_label = nullptr;
 static lv_timer_t *s_refresh_timer = nullptr;
+static lv_timer_t *s_shutdown_timer = nullptr;
 static lv_obj_t *s_gauge_lines[GAUGE_LINE_COUNT] = {};
 static lv_obj_t *s_charger_lines[CHARGER_LINE_COUNT] = {};
+static lv_obj_t *s_shutdown_btn = nullptr;
+static lv_obj_t *s_shutdown_prompt_overlay = nullptr;
+static lv_obj_t *s_shutdown_prompt_card = nullptr;
+static lv_obj_t *s_shutdown_prompt_text = nullptr;
+static lv_obj_t *s_shutdown_message_overlay = nullptr;
+static lv_obj_t *s_shutdown_message_label = nullptr;
+
+static void refresh_battery_ui();
 
 static void style_transparent_container(lv_obj_t *obj)
 {
@@ -85,6 +97,41 @@ static void set_text_if_changed(lv_obj_t *label, const char *text)
     }
 }
 
+static bool shutdown_prompt_visible()
+{
+    return s_shutdown_prompt_overlay != nullptr &&
+           !lv_obj_has_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static bool shutdown_message_visible()
+{
+    return s_shutdown_message_overlay != nullptr &&
+           !lv_obj_has_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void refresh_shutdown_button()
+{
+    if (s_shutdown_btn == nullptr) {
+        return;
+    }
+
+    const factory_battery_state_t *state = factory_battery_get_state();
+    const bool shutdown_allowed =
+        state != nullptr &&
+        state->charger_ready &&
+        state->charger_read_ok &&
+        !state->vbus_connected &&
+        !shutdown_prompt_visible() &&
+        !shutdown_message_visible() &&
+        s_shutdown_timer == nullptr;
+
+    if (shutdown_allowed) {
+        lv_obj_clear_state(s_shutdown_btn, LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(s_shutdown_btn, LV_STATE_DISABLED);
+    }
+}
+
 static lv_obj_t *create_line_label(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *label = lv_label_create(parent);
@@ -118,6 +165,49 @@ static lv_obj_t *create_readout_panel(lv_obj_t *parent,
     }
 
     return panel;
+}
+
+static void hide_shutdown_prompt()
+{
+    if (s_shutdown_prompt_overlay == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_HIDDEN);
+    refresh_shutdown_button();
+}
+
+static void show_shutdown_prompt()
+{
+    if (s_shutdown_prompt_overlay == nullptr) {
+        return;
+    }
+
+    lv_obj_clear_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_shutdown_prompt_overlay);
+    refresh_shutdown_button();
+}
+
+static void hide_shutdown_message()
+{
+    if (s_shutdown_message_overlay == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
+    refresh_shutdown_button();
+}
+
+static void show_shutdown_message(const char *message)
+{
+    if (s_shutdown_message_overlay == nullptr || s_shutdown_message_label == nullptr) {
+        return;
+    }
+
+    lv_label_set_text(s_shutdown_message_label, message);
+    lv_obj_clear_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_shutdown_message_overlay);
+    refresh_shutdown_button();
 }
 
 static const char *primary_mode_text(const factory_battery_state_t *state)
@@ -216,6 +306,7 @@ static void refresh_battery_ui()
     if (state == nullptr) {
         set_gauge_placeholder("--");
         set_charger_placeholder("--");
+        refresh_shutdown_button();
         return;
     }
 
@@ -314,6 +405,8 @@ static void refresh_battery_ui()
                       state->charge_enabled ? "Enabled" : "Disabled");
         set_line_value(s_charger_lines[CHARGER_LINE_STATUS], line);
     }
+
+    refresh_shutdown_button();
 }
 
 static void refresh_timer_cb(lv_timer_t *timer)
@@ -322,8 +415,155 @@ static void refresh_timer_cb(lv_timer_t *timer)
     refresh_battery_ui();
 }
 
+static void shutdown_timer_cb(lv_timer_t *timer)
+{
+    if (timer != nullptr) {
+        lv_timer_del(timer);
+    }
+    s_shutdown_timer = nullptr;
+
+    if (factory_battery_shutdown()) {
+        return;
+    }
+
+    show_shutdown_message("Shutdown failed.");
+    factory_display_request_full_refresh();
+    refresh_battery_ui();
+}
+
+static void shutdown_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    const factory_battery_state_t *state = factory_battery_get_state();
+    if (state == nullptr || state->vbus_connected || !state->charger_ready || !state->charger_read_ok) {
+        return;
+    }
+
+    show_shutdown_prompt();
+}
+
+static void shutdown_prompt_cancel_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    hide_shutdown_prompt();
+    refresh_battery_ui();
+}
+
+static void shutdown_prompt_confirm_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    const factory_battery_state_t *state = factory_battery_get_state();
+    if (state == nullptr || state->vbus_connected || !state->charger_ready || !state->charger_read_ok) {
+        hide_shutdown_prompt();
+        refresh_battery_ui();
+        return;
+    }
+
+    hide_shutdown_prompt();
+    show_shutdown_message("The device has been shut down.");
+    factory_display_request_full_refresh();
+
+    if (s_shutdown_timer != nullptr) {
+        lv_timer_del(s_shutdown_timer);
+        s_shutdown_timer = nullptr;
+    }
+    s_shutdown_timer = lv_timer_create(shutdown_timer_cb, kShutdownDelayMs, nullptr);
+    lv_timer_set_repeat_count(s_shutdown_timer, 1);
+}
+
+static void create_shutdown_prompt(lv_obj_t *parent)
+{
+    s_shutdown_prompt_overlay = lv_obj_create(parent);
+    lv_obj_set_size(s_shutdown_prompt_overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s_shutdown_prompt_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_shutdown_prompt_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_shutdown_prompt_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_shutdown_prompt_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(s_shutdown_prompt_overlay, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+
+    s_shutdown_prompt_card = lv_obj_create(s_shutdown_prompt_overlay);
+    lv_obj_set_size(s_shutdown_prompt_card, lv_pct(86), LV_SIZE_CONTENT);
+    lv_obj_align(s_shutdown_prompt_card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_shutdown_prompt_card, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_shutdown_prompt_card, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_shutdown_prompt_card, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_shutdown_prompt_card, 18, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_shutdown_prompt_card, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(s_shutdown_prompt_card, 12, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(s_shutdown_prompt_card, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(s_shutdown_prompt_card, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_flex_flow(s_shutdown_prompt_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_shutdown_prompt_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    lv_obj_t *title = lv_label_create(s_shutdown_prompt_card);
+    lv_obj_set_width(title, lv_pct(100));
+    lv_label_set_text(title, "Shutdown");
+    lv_obj_set_style_text_font(title, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title, lv_color_black(), LV_PART_MAIN);
+
+    s_shutdown_prompt_text = lv_label_create(s_shutdown_prompt_card);
+    lv_obj_set_width(s_shutdown_prompt_text, lv_pct(100));
+    lv_label_set_long_mode(s_shutdown_prompt_text, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_shutdown_prompt_text, "Confirm shutdown? This works only on battery power.");
+    lv_obj_set_style_text_font(s_shutdown_prompt_text, FACTORY_FONT_BODY, LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_shutdown_prompt_text, lv_color_black(), LV_PART_MAIN);
+
+    lv_obj_t *btn_row = lv_obj_create(s_shutdown_prompt_card);
+    lv_obj_set_width(btn_row, lv_pct(100));
+    lv_obj_set_height(btn_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(btn_row, 0, LV_PART_MAIN);
+    lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *cancel_btn =
+        factory_ui_create_action_button(btn_row, "Cancel", shutdown_prompt_cancel_event_cb, nullptr);
+    lv_obj_set_width(cancel_btn, lv_pct(48));
+
+    lv_obj_t *confirm_btn =
+        factory_ui_create_action_button(btn_row, "Confirm", shutdown_prompt_confirm_event_cb, nullptr);
+    lv_obj_set_width(confirm_btn, lv_pct(48));
+}
+
+static void create_shutdown_message_overlay(lv_obj_t *parent)
+{
+    s_shutdown_message_overlay = lv_obj_create(parent);
+    lv_obj_set_size(s_shutdown_message_overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s_shutdown_message_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_shutdown_message_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_shutdown_message_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_shutdown_message_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(s_shutdown_message_overlay, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+
+    s_shutdown_message_label = lv_label_create(s_shutdown_message_overlay);
+    lv_obj_set_width(s_shutdown_message_label, lv_pct(88));
+    lv_label_set_long_mode(s_shutdown_message_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_shutdown_message_label, "The device has been shut down.");
+    lv_obj_align(s_shutdown_message_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_align(s_shutdown_message_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_shutdown_message_label, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_shutdown_message_label, lv_color_black(), LV_PART_MAIN);
+}
+
 static void create_battery(lv_obj_t *parent)
 {
+    s_root = parent;
     factory_ui_apply_screen(parent);
     factory_ui_create_back_button(parent, "Battery");
 
@@ -356,13 +596,21 @@ static void create_battery(lv_obj_t *parent)
     lv_obj_set_scroll_dir(row, LV_DIR_VER);
 
     (void)create_readout_panel(row, "BQ27220", s_gauge_lines, GAUGE_LINE_COUNT);
-    (void)create_readout_panel(row, "BQ25896", s_charger_lines, CHARGER_LINE_COUNT);
+
+    lv_obj_t *charger_panel = create_readout_panel(row, "BQ25896", s_charger_lines, CHARGER_LINE_COUNT);
+    s_shutdown_btn = factory_ui_create_action_button(charger_panel, "Shutdown", shutdown_btn_event_cb, nullptr);
+    lv_obj_set_width(s_shutdown_btn, lv_pct(100));
+
+    create_shutdown_prompt(parent);
+    create_shutdown_message_overlay(parent);
 
     refresh_battery_ui();
 }
 
 static void entry_battery(void)
 {
+    hide_shutdown_prompt();
+    hide_shutdown_message();
     refresh_battery_ui();
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
@@ -377,13 +625,29 @@ static void exit_battery(void)
         lv_timer_del(s_refresh_timer);
         s_refresh_timer = nullptr;
     }
+
+    if (s_shutdown_timer != nullptr) {
+        lv_timer_del(s_shutdown_timer);
+        s_shutdown_timer = nullptr;
+    }
+
+    hide_shutdown_prompt();
+    hide_shutdown_message();
 }
 
 static void destroy_battery(void)
 {
+    s_root = nullptr;
     s_mode_label = nullptr;
     s_summary_label = nullptr;
     s_refresh_timer = nullptr;
+    s_shutdown_timer = nullptr;
+    s_shutdown_btn = nullptr;
+    s_shutdown_prompt_overlay = nullptr;
+    s_shutdown_prompt_card = nullptr;
+    s_shutdown_prompt_text = nullptr;
+    s_shutdown_message_overlay = nullptr;
+    s_shutdown_message_label = nullptr;
     std::memset(s_gauge_lines, 0, sizeof(s_gauge_lines));
     std::memset(s_charger_lines, 0, sizeof(s_charger_lines));
 }

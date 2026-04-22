@@ -54,6 +54,7 @@ const factory_battery_state_t *factory_battery_get_state(void);
 const char *factory_battery_get_status_text(void);
 const char *factory_battery_charge_status_name(uint8_t status);
 const char *factory_battery_gauge_state_name(uint8_t state);
+bool factory_battery_shutdown(void);
 void factory_battery_format_temperature(char *buffer, size_t buffer_size, uint16_t temperature_dk);
 
 #ifdef __cplusplus

@@ -400,6 +400,37 @@ extern "C" const char *factory_battery_gauge_state_name(uint8_t state)
     }
 }
 
+extern "C" bool factory_battery_shutdown(void)
+{
+    ensure_initialized();
+
+    if (!s_bq25896_ready) {
+        ESP_LOGW(TAG, "Shutdown rejected: BQ25896 not ready");
+        return false;
+    }
+
+    bq25896_status_t charger_status = {};
+    const bq25896_err_t status_rc = bq25896_read_status(&s_bq25896, &charger_status);
+    if (BQ25896_FAILED(status_rc)) {
+        ESP_LOGE(TAG, "Shutdown rejected: unable to read charger status: %s", bq25896_err_name(status_rc));
+        return false;
+    }
+
+    if (charger_status.vbus_good || charger_status.power_good) {
+        ESP_LOGW(TAG, "Shutdown rejected: VBUS still present");
+        return false;
+    }
+
+    const bq25896_err_t shutdown_rc = bq25896_shutdown(&s_bq25896);
+    if (BQ25896_FAILED(shutdown_rc)) {
+        ESP_LOGE(TAG, "BQ25896 shutdown failed: %s", bq25896_err_name(shutdown_rc));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "BQ25896 shutdown requested");
+    return true;
+}
+
 extern "C" void factory_battery_format_temperature(char *buffer, size_t buffer_size, uint16_t temperature_dk)
 {
     if (buffer == nullptr || buffer_size == 0U) {
