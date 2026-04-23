@@ -15,6 +15,8 @@ static lv_obj_t *s_dither_sw = nullptr;
 static lv_obj_t *s_low_flash_sw = nullptr;
 static lv_obj_t *s_auto_full_dd = nullptr;
 
+static const uint8_t kAutoFullOptions[] = {0, 5, 10, 15, 20, 25, 30};
+
 static void sync_switch_checked(lv_obj_t *sw, bool checked)
 {
     if (sw == nullptr) {
@@ -54,7 +56,6 @@ static void update_mode_dependency()
 
 static void sync_adjust_widgets()
 {
-    static const uint8_t kAutoFullOptions[] = {5, 10, 15, 20, 25, 30};
     const factory_display_mode_info_t *info = factory_display_get_mode_info();
     int rotation_idx = 0;
     if (info->rotation_deg == 90U) {
@@ -187,15 +188,13 @@ static void low_flash_event_cb(lv_event_t *e)
 
 static void auto_full_event_cb(lv_event_t *e)
 {
-    static const uint8_t kAutoFullOptions[] = {5, 10, 15, 20, 25, 30};
-
     if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
         return;
     }
 
     int selected = lv_dropdown_get_selected(s_auto_full_dd);
     if (selected < 0 || selected >= (int)(sizeof(kAutoFullOptions) / sizeof(kAutoFullOptions[0]))) {
-        selected = 2;
+        selected = 0;
     }
     factory_display_set_max_partial_refreshes_before_full(kAutoFullOptions[selected]);
 }
@@ -242,7 +241,7 @@ static void create_adjust(lv_obj_t *parent)
     s_low_flash_sw = create_switch(row_low_flash);
 
     lv_obj_t *row_auto_full = create_row(panel, "Full after partials");
-    s_auto_full_dd = create_dropdown(row_auto_full, "5\n10\n15\n20\n25\n30");
+    s_auto_full_dd = create_dropdown(row_auto_full, "Disable\n5\n10\n15\n20\n25\n30");
 
     lv_obj_t *btn = factory_ui_create_action_button(panel, "Run Full Refresh", full_refresh_btn_event_cb, nullptr);
     lv_obj_set_width(btn, 280);
