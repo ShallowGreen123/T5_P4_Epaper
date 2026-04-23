@@ -104,4 +104,44 @@ config FACTORY_BOOT_TOUCH_DIAGNOSTICS
     bool "Boot directly into the touch diagnostics page"
     default n
 
+config FACTORY_AUDIO_SAMPLE_RATE
+    int "Audio showcase sample rate (Hz)"
+    default 16000
+    range 8000 48000
+    help
+        The ES8311 showcase uses a 256x MCLK coefficient table for common rates.
+        Keep the default 16000 Hz for factory microphone and loopback tests.
+
+config FACTORY_AUDIO_RECORD_SECONDS
+    int "Audio showcase recording length (s)"
+    default 3
+    range 1 10
+
+config FACTORY_AUDIO_VOLUME_PERCENT
+    int "Audio showcase speaker volume (%)"
+    default 70
+    range 0 100
+
+config FACTORY_AUDIO_MIC_GAIN_DB
+    int "Audio showcase microphone gain (dB)"
+    default 30
+    range 0 42
+    help
+        Rounded to the nearest ES8311 6 dB gain step.
+
+config FACTORY_AUDIO_MIC_PASS_PEAK_PERCENT
+    int "Audio showcase microphone PASS peak threshold (%)"
+    default 4
+    range 1 100
+
+config FACTORY_AUDIO_MONITOR_PERIOD_MS
+    int "Audio showcase monitor polling period (ms)"
+    default 120
+    range 20 1000
+
+config FACTORY_AUDIO_TASK_STACK_SIZE
+    int "Audio showcase task stack size"
+    default 6144
+    range 4096 16384
+
 endmenu

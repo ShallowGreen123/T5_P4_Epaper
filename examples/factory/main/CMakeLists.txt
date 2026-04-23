@@ -17,6 +17,7 @@ idf_component_register(
         esp_event
         esp_driver_gpio
         esp_driver_i2c
+        esp_driver_i2s
         esp_driver_sdspi
         esp_driver_spi
         esp_lcd

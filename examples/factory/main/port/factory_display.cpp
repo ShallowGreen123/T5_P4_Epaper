@@ -19,6 +19,7 @@ static const char *TAG = "factory_display";
 constexpr int kDrawBufPixels = FACTORY_BOARD_WIDTH * FACTORY_DRAW_BUF_LINES;
 constexpr int kFramebufferPitch1bpp = (FACTORY_BOARD_WIDTH + 7) / 8;
 constexpr int kFramebufferPitch4bpp = FACTORY_BOARD_WIDTH / 2;
+constexpr uint8_t kDisableMaxPartialRefreshesBeforeFull = 0;
 constexpr uint8_t kMinMaxPartialRefreshesBeforeFull = 5;
 constexpr uint8_t kMaxMaxPartialRefreshesBeforeFull = 30;
 constexpr uint8_t kMaxPartialRefreshesStep = 5;
@@ -28,7 +29,7 @@ constexpr uint8_t kMaxPartialRefreshesStep = 5;
 // without an extra black/white clear cycle so we can suppress ghosting from
 // earlier partial updates without turning every maintenance refresh into a
 // visible flash.
-constexpr uint8_t kDefaultMaxPartialRefreshesBeforeFull = 15;
+constexpr uint8_t kDefaultMaxPartialRefreshesBeforeFull = kDisableMaxPartialRefreshesBeforeFull;
 constexpr int kInitialFullRefreshMode = CLEAR_SLOW;
 constexpr int kRuntimeFullRefreshMode = CLEAR_FAST;
 constexpr uint8_t kBayer4[4][4] = {
@@ -81,6 +82,10 @@ static uint16_t normalize_rotation(uint16_t rotation_deg)
 
 static uint8_t normalize_max_partial_refreshes_before_full(uint8_t count)
 {
+    if (count == kDisableMaxPartialRefreshesBeforeFull) {
+        return kDisableMaxPartialRefreshesBeforeFull;
+    }
+
     if (count < kMinMaxPartialRefreshesBeforeFull) {
         count = kMinMaxPartialRefreshesBeforeFull;
     }
@@ -139,16 +144,23 @@ static void update_mode_summary()
             mirror_text,
             flash_text);
     } else {
+        char auto_text[16] = {};
+        if (s_max_partial_refreshes_before_full == kDisableMaxPartialRefreshesBeforeFull) {
+            snprintf(auto_text, sizeof(auto_text), "off");
+        } else {
+            snprintf(auto_text, sizeof(auto_text), "%u", (unsigned)s_max_partial_refreshes_before_full);
+        }
+
         snprintf(
             s_mode_summary,
             sizeof(s_mode_summary),
-            "1bpp partial refresh | rot %u | %s | %s | p%u/f%u | auto %u",
+            "1bpp partial refresh | rot %u | %s | %s | p%u/f%u | auto %s",
             s_mode_info.rotation_deg,
             mirror_text,
             dither_text,
             s_mode_info.partial_passes,
             s_mode_info.full_passes,
-            (unsigned)s_max_partial_refreshes_before_full);
+            auto_text);
     }
 }
 
@@ -189,7 +201,9 @@ static void flush_to_panel()
         return;
     }
 
-    const bool auto_full_refresh = s_partial_refresh_count >= s_max_partial_refreshes_before_full;
+    const bool auto_full_refresh =
+        s_max_partial_refreshes_before_full != kDisableMaxPartialRefreshesBeforeFull &&
+        s_partial_refresh_count >= s_max_partial_refreshes_before_full;
 
     if (s_force_full_refresh || !s_display_started || auto_full_refresh) {
         const int clear_mode = s_display_started ? kRuntimeFullRefreshMode : kInitialFullRefreshMode;
