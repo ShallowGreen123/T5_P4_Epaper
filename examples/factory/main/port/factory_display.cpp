@@ -17,7 +17,8 @@ namespace {
 static const char *TAG = "factory_display";
 
 constexpr int kDrawBufPixels = FACTORY_BOARD_WIDTH * FACTORY_DRAW_BUF_LINES;
-constexpr int kFramebufferPitch = (FACTORY_BOARD_WIDTH + 7) / 8;
+constexpr int kFramebufferPitch1bpp = (FACTORY_BOARD_WIDTH + 7) / 8;
+constexpr int kFramebufferPitch4bpp = FACTORY_BOARD_WIDTH / 2;
 constexpr uint8_t kMinMaxPartialRefreshesBeforeFull = 5;
 constexpr uint8_t kMaxMaxPartialRefreshesBeforeFull = 30;
 constexpr uint8_t kMaxPartialRefreshesStep = 5;
@@ -41,7 +42,10 @@ static FASTEPD s_epaper;
 static lv_color_t *s_draw_buf_1 = nullptr;
 static lv_color_t *s_draw_buf_2 = nullptr;
 static uint8_t *s_framebuffer = nullptr;
+static bool s_use_4bpp_color = false;
 static bool s_enable_dither = false;
+static bool s_low_flash = true;
+static bool s_first_4bpp_refresh = true;
 static bool s_force_full_refresh = true;
 static bool s_display_started = false;
 static int s_pending_y_min = FACTORY_BOARD_HEIGHT;
@@ -94,10 +98,16 @@ static uint8_t normalize_max_partial_refreshes_before_full(uint8_t count)
     return count;
 }
 
+static int framebuffer_pitch()
+{
+    return s_use_4bpp_color ? kFramebufferPitch4bpp : kFramebufferPitch1bpp;
+}
+
 static void update_mode_summary()
 {
     const char *mirror_text = "normal";
     const char *dither_text = s_enable_dither ? "dth" : "mono";
+    const char *flash_text = s_low_flash ? "lowflash" : "fullflash";
     switch (s_mode_info.mirror_mode & 0x3U) {
         case 1:
             mirror_text = "mirror-x";
@@ -118,17 +128,28 @@ static void update_mode_summary()
     s_mode_info.height = (s_mode_info.rotation_deg == 90U || s_mode_info.rotation_deg == 270U)
                              ? FACTORY_BOARD_WIDTH
                              : FACTORY_BOARD_HEIGHT;
+    s_mode_info.mode_name = s_use_4bpp_color ? "4bpp grayscale" : "1bpp monochrome";
 
-    snprintf(
-        s_mode_summary,
-        sizeof(s_mode_summary),
-        "1bpp partial refresh | rot %u | %s | %s | p%u/f%u | auto %u",
-        s_mode_info.rotation_deg,
-        mirror_text,
-        dither_text,
-        s_mode_info.partial_passes,
-        s_mode_info.full_passes,
-        (unsigned)s_max_partial_refreshes_before_full);
+    if (s_use_4bpp_color) {
+        snprintf(
+            s_mode_summary,
+            sizeof(s_mode_summary),
+            "4bpp grayscale | rot %u | %s | %s",
+            s_mode_info.rotation_deg,
+            mirror_text,
+            flash_text);
+    } else {
+        snprintf(
+            s_mode_summary,
+            sizeof(s_mode_summary),
+            "1bpp partial refresh | rot %u | %s | %s | p%u/f%u | auto %u",
+            s_mode_info.rotation_deg,
+            mirror_text,
+            dither_text,
+            s_mode_info.partial_passes,
+            s_mode_info.full_passes,
+            (unsigned)s_max_partial_refreshes_before_full);
+    }
 }
 
 static void begin_flush()
@@ -149,6 +170,25 @@ static void note_flush_rows(int y1, int y2)
 
 static void flush_to_panel()
 {
+    if (s_use_4bpp_color) {
+        int clear_mode = CLEAR_NONE;
+        if (s_force_full_refresh) {
+            clear_mode = CLEAR_SLOW;
+        } else if (!s_low_flash) {
+            clear_mode = CLEAR_SLOW;
+        } else if (s_first_4bpp_refresh) {
+            clear_mode = CLEAR_SLOW;
+        }
+
+        s_epaper.fullUpdate(clear_mode, true);
+        s_force_full_refresh = false;
+        s_display_started = true;
+        s_first_4bpp_refresh = false;
+        s_partial_refresh_count = 0;
+        begin_flush();
+        return;
+    }
+
     const bool auto_full_refresh = s_partial_refresh_count >= s_max_partial_refreshes_before_full;
 
     if (s_force_full_refresh || !s_display_started || auto_full_refresh) {
@@ -162,6 +202,47 @@ static void flush_to_panel()
         s_partial_refresh_count++;
     }
     begin_flush();
+}
+
+static bool apply_color_mode(bool use_4bpp)
+{
+    if (use_4bpp) {
+        if (s_epaper.setMode(BB_MODE_4BPP) != BBEP_SUCCESS) {
+            ESP_LOGE(TAG, "setMode(BB_MODE_4BPP) failed");
+            return false;
+        }
+        s_use_4bpp_color = true;
+        s_framebuffer = s_epaper.currentBuffer();
+        if (s_framebuffer == nullptr) {
+            ESP_LOGE(TAG, "currentBuffer returned null in 4bpp mode");
+            return false;
+        }
+        s_epaper.fillScreen(BBEP_WHITE);
+        s_first_4bpp_refresh = true;
+    } else {
+        if (s_epaper.clearWhite() != BBEP_SUCCESS) {
+            ESP_LOGW(TAG, "clearWhite before switching to 1bpp failed");
+        }
+        if (s_epaper.setMode(BB_MODE_1BPP) != BBEP_SUCCESS) {
+            ESP_LOGE(TAG, "setMode(BB_MODE_1BPP) failed");
+            return false;
+        }
+        s_use_4bpp_color = false;
+        s_epaper.setPasses(s_mode_info.partial_passes, s_mode_info.full_passes);
+        s_framebuffer = s_epaper.currentBuffer();
+        if (s_framebuffer == nullptr) {
+            ESP_LOGE(TAG, "currentBuffer returned null in 1bpp mode");
+            return false;
+        }
+        s_epaper.fillScreen(BBEP_WHITE);
+    }
+
+    s_force_full_refresh = true;
+    s_display_started = false;
+    s_partial_refresh_count = 0;
+    begin_flush();
+    update_mode_summary();
+    return true;
 }
 
 static void transform_logical_to_panel(int32_t logical_x, int32_t logical_y, int32_t *panel_x, int32_t *panel_y)
@@ -260,30 +341,42 @@ static void disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_
                 continue;
             }
 
-            bool is_white = false;
-            if (s_enable_dither) {
-                const uint8_t threshold = (uint8_t)(kBayer4[panel_y & 0x3][panel_x & 0x3] * 16U);
-                is_white = gray >= threshold;
+            if (s_use_4bpp_color) {
+                const uint8_t gray4 = (uint8_t)(gray >> 4);
+                uint8_t &dst = s_framebuffer[(panel_y * framebuffer_pitch()) + (panel_x >> 1)];
+                if ((panel_x & 1) == 0) {
+                    dst = (uint8_t)((dst & 0x0F) | (gray4 << 4));
+                } else {
+                    dst = (uint8_t)((dst & 0xF0) | gray4);
+                }
             } else {
-                is_white = gray >= 128;
-            }
+                bool is_white = false;
+                if (s_enable_dither) {
+                    const uint8_t threshold = (uint8_t)(kBayer4[panel_y & 0x3][panel_x & 0x3] * 16U);
+                    is_white = gray >= threshold;
+                } else {
+                    is_white = gray >= 128;
+                }
 
-            uint8_t &dst = s_framebuffer[(panel_y * kFramebufferPitch) + (panel_x >> 3)];
-            const uint8_t mask = (uint8_t)(0x80u >> (panel_x & 0x07));
-            if (is_white) {
-                dst = (uint8_t)(dst | mask);
-            } else {
-                dst = (uint8_t)(dst & (uint8_t)(~mask));
+                uint8_t &dst = s_framebuffer[(panel_y * framebuffer_pitch()) + (panel_x >> 3)];
+                const uint8_t mask = (uint8_t)(0x80u >> (panel_x & 0x07));
+                if (is_white) {
+                    dst = (uint8_t)(dst | mask);
+                } else {
+                    dst = (uint8_t)(dst & (uint8_t)(~mask));
+                }
             }
         }
     }
 
-    lv_area_t clipped_area = {};
-    clipped_area.x1 = (lv_coord_t)clipped_x1;
-    clipped_area.y1 = (lv_coord_t)clipped_y1;
-    clipped_area.x2 = (lv_coord_t)clipped_x2;
-    clipped_area.y2 = (lv_coord_t)clipped_y2;
-    note_transformed_rows(&clipped_area);
+    if (!s_use_4bpp_color) {
+        lv_area_t clipped_area = {};
+        clipped_area.x1 = (lv_coord_t)clipped_x1;
+        clipped_area.y1 = (lv_coord_t)clipped_y1;
+        clipped_area.x2 = (lv_coord_t)clipped_x2;
+        clipped_area.y2 = (lv_coord_t)clipped_y2;
+        note_transformed_rows(&clipped_area);
+    }
     if (lv_disp_flush_is_last(disp_drv)) {
         flush_to_panel();
     }
@@ -373,6 +466,9 @@ static bool init_panel()
     }
 
     s_epaper.fillScreen(BBEP_WHITE);
+    s_use_4bpp_color = false;
+    s_low_flash = true;
+    s_first_4bpp_refresh = true;
     begin_flush();
     return true;
 }
@@ -467,9 +563,34 @@ extern "C" void factory_display_set_passes(uint8_t partial_passes, uint8_t full_
 
     s_mode_info.partial_passes = partial_passes;
     s_mode_info.full_passes = full_passes;
-    s_epaper.setPasses(partial_passes, full_passes);
+    if (!s_use_4bpp_color) {
+        s_epaper.setPasses(partial_passes, full_passes);
+    }
     update_mode_summary();
-    factory_display_request_full_refresh();
+    if (!s_use_4bpp_color) {
+        factory_display_request_full_refresh();
+    }
+}
+
+extern "C" void factory_display_set_color_mode(bool use_4bpp)
+{
+    if (s_use_4bpp_color == use_4bpp) {
+        return;
+    }
+
+    if (!apply_color_mode(use_4bpp)) {
+        update_mode_summary();
+        return;
+    }
+
+    if (lv_scr_act() != nullptr) {
+        lv_obj_invalidate(lv_scr_act());
+    }
+}
+
+extern "C" bool factory_display_get_color_mode(void)
+{
+    return s_use_4bpp_color;
 }
 
 extern "C" void factory_display_set_dither(bool enable)
@@ -480,12 +601,33 @@ extern "C" void factory_display_set_dither(bool enable)
 
     s_enable_dither = enable;
     update_mode_summary();
-    factory_display_request_full_refresh();
+    if (!s_use_4bpp_color) {
+        factory_display_request_full_refresh();
+    }
 }
 
 extern "C" bool factory_display_get_dither(void)
 {
     return s_enable_dither;
+}
+
+extern "C" void factory_display_set_low_flash(bool enable)
+{
+    if (s_low_flash == enable) {
+        return;
+    }
+
+    s_low_flash = enable;
+    s_first_4bpp_refresh = true;
+    update_mode_summary();
+    if (s_use_4bpp_color) {
+        factory_display_request_full_refresh();
+    }
+}
+
+extern "C" bool factory_display_get_low_flash(void)
+{
+    return s_low_flash;
 }
 
 extern "C" void factory_display_set_max_partial_refreshes_before_full(uint8_t count)

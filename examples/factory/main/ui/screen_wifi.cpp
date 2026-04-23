@@ -34,6 +34,18 @@ static bool s_last_connecting = false;
 
 static void refresh_scan_list();
 
+static void set_text_if_changed(lv_obj_t *label, const char *text)
+{
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+
+    const char *current = lv_label_get_text(label);
+    if (current == nullptr || std::strcmp(current, text) != 0) {
+        lv_label_set_text(label, text);
+    }
+}
+
 static void invalidate_scan_list()
 {
     s_scan_list_dirty = true;
@@ -50,14 +62,20 @@ static void refresh_scan_button()
         return;
     }
 
-    lv_label_set_text(
+    set_text_if_changed(
         s_scan_btn_label,
         factory_wifi_has_scan_started() ? "Rescan" : "Scan WiFi");
 
-    if (factory_wifi_scan_busy() || factory_wifi_is_connecting() || password_prompt_visible()) {
+    const bool should_disable =
+        factory_wifi_scan_busy() || factory_wifi_is_connecting() || password_prompt_visible();
+    const bool is_disabled = lv_obj_has_state(s_scan_btn, LV_STATE_DISABLED);
+
+    if (should_disable && !is_disabled) {
         lv_obj_add_state(s_scan_btn, LV_STATE_DISABLED);
     } else {
-        lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
+        if (!should_disable && is_disabled) {
+            lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
+        }
     }
 }
 
@@ -102,10 +120,10 @@ static void show_password_prompt()
 static void refresh_wifi_ui()
 {
     if (s_state_label != nullptr) {
-        lv_label_set_text(s_state_label, factory_wifi_get_state_text());
+        set_text_if_changed(s_state_label, factory_wifi_get_state_text());
     }
     if (s_summary_label != nullptr) {
-        lv_label_set_text(s_summary_label, factory_wifi_get_summary());
+        set_text_if_changed(s_summary_label, factory_wifi_get_summary());
     }
 
     refresh_scan_list();
