@@ -1,5 +1,21 @@
 menu "Factory Example"
 
+menu "Display"
+
+config FACTORY_DISPLAY_TEST_LOCAL_REFRESH_MS
+    int "Display test local refresh period (ms)"
+    default 1200
+    range 100 60000
+
+config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
+    int "Display test automatic full refresh period (ms)"
+    default 30000
+    range 1000 600000
+
+endmenu
+
+menu "Touch"
+
 config FACTORY_TOUCH_I2C_ADDR
     hex "GT911 7-bit I2C address"
     default 0x5D
@@ -20,15 +36,9 @@ config FACTORY_TOUCH_INT_GPIO
     default 3
     range 0 54
 
-config FACTORY_DISPLAY_TEST_LOCAL_REFRESH_MS
-    int "Display test local refresh period (ms)"
-    default 1200
-    range 100 60000
+endmenu
 
-config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
-    int "Display test automatic full refresh period (ms)"
-    default 30000
-    range 1000 600000
+menu "Battery"
 
 config FACTORY_BATTERY_BQ25896_ADDR
     hex "BQ25896 7-bit I2C address"
@@ -100,9 +110,9 @@ config FACTORY_BATTERY_LOW_POWER_POLL_MS
     default 250
     range 100 5000
 
-config FACTORY_BOOT_TOUCH_DIAGNOSTICS
-    bool "Boot directly into the touch diagnostics page"
-    default n
+endmenu
+
+menu "Audio"
 
 config FACTORY_AUDIO_SAMPLE_RATE
     int "Audio showcase sample rate (Hz)"
@@ -121,6 +131,30 @@ config FACTORY_AUDIO_VOLUME_PERCENT
     int "Audio showcase speaker volume (%)"
     default 70
     range 0 100
+
+config FACTORY_AUDIO_LOOPBACK_VOLUME_PERCENT
+    int "Audio showcase safe loopback speaker volume (%)"
+    default 65
+    range 0 100
+    help
+        Live mic-to-speaker loopback can create acoustic feedback when the
+        microphone is close to the speaker. Keep this low for factory safety.
+
+config FACTORY_AUDIO_LOOPBACK_GAIN_PERCENT
+    int "Audio showcase safe loopback digital gain (%)"
+    default 18
+    range 0 100
+    help
+        Digital attenuation applied before writing microphone samples back to
+        the speaker during loopback.
+
+config FACTORY_AUDIO_LOOPBACK_LIMIT_PERCENT
+    int "Audio showcase safe loopback output limiter (%)"
+    default 18
+    range 1 50
+    help
+        Maximum absolute PCM output level during loopback, as a percentage of
+        full scale.
 
 config FACTORY_AUDIO_MIC_GAIN_DB
     int "Audio showcase microphone gain (dB)"
@@ -143,5 +177,7 @@ config FACTORY_AUDIO_TASK_STACK_SIZE
     int "Audio showcase task stack size"
     default 6144
     range 4096 16384
+
+endmenu
 
 endmenu

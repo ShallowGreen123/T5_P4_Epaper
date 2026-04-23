@@ -33,6 +33,9 @@ constexpr uint8_t kAmpEnableMask = (1U << FACTORY_PCA_SHUTDOWN);
 constexpr uint32_t kSampleRate = CONFIG_FACTORY_AUDIO_SAMPLE_RATE;
 constexpr uint32_t kRecordSeconds = CONFIG_FACTORY_AUDIO_RECORD_SECONDS;
 constexpr uint8_t kVolumePercent = CONFIG_FACTORY_AUDIO_VOLUME_PERCENT;
+constexpr uint8_t kLoopbackVolumePercent = CONFIG_FACTORY_AUDIO_LOOPBACK_VOLUME_PERCENT;
+constexpr uint8_t kLoopbackGainPercent = CONFIG_FACTORY_AUDIO_LOOPBACK_GAIN_PERCENT;
+constexpr uint8_t kLoopbackLimitPercent = CONFIG_FACTORY_AUDIO_LOOPBACK_LIMIT_PERCENT;
 constexpr uint8_t kMicGainDb = CONFIG_FACTORY_AUDIO_MIC_GAIN_DB;
 constexpr uint32_t kMclkMultiple = 256;
 constexpr uint32_t kMclkHz = kSampleRate * kMclkMultiple;
@@ -338,6 +341,17 @@ static esp_err_t es8311_set_volume(uint8_t volume_percent)
     return codec_write(ES8311_DAC_REG32, reg32);
 }
 
+static void set_runtime_volume(uint8_t volume_percent)
+{
+    if (es8311_set_volume(volume_percent) != ESP_OK) {
+        return;
+    }
+
+    lock_state();
+    s_state.volume_percent = volume_percent;
+    unlock_state();
+}
+
 static esp_err_t es8311_mute(bool mute)
 {
     uint8_t reg31 = 0;
@@ -608,6 +622,7 @@ static void perform_playback()
     unlock_state();
 
     (void)audio_amp_set(true);
+    set_runtime_volume(kVolumePercent);
     (void)es8311_mute(false);
 
     size_t offset = 0;
@@ -636,6 +651,7 @@ static void perform_playback()
     }
 
     (void)audio_amp_set(false);
+    set_runtime_volume(kVolumePercent);
 
     lock_state();
     s_state.mode = FACTORY_AUDIO_MODE_MONITOR;
@@ -650,7 +666,8 @@ static void perform_playback()
 
 static void perform_loopback(int16_t *io_buffer)
 {
-    set_status(FACTORY_AUDIO_MODE_LOOPBACK, "LOOP", "Live mic-to-speaker loopback. Press Stop to exit.");
+    set_status(FACTORY_AUDIO_MODE_LOOPBACK, "SAFE LOOP", "Safe loopback: low volume, attenuated, limited. Press Stop to exit.");
+    set_runtime_volume(kLoopbackVolumePercent);
     (void)audio_amp_set(true);
     (void)es8311_mute(false);
 
@@ -666,6 +683,18 @@ static void perform_loopback(int16_t *io_buffer)
         }
 
         analyze_samples(io_buffer, bytes_read / sizeof(int16_t), false);
+        const int32_t output_limit = (int32_t)32767 * kLoopbackLimitPercent / 100;
+        const size_t sample_count = bytes_read / sizeof(int16_t);
+        for (size_t i = 0; i < sample_count; ++i) {
+            int32_t sample = (int32_t)io_buffer[i] * kLoopbackGainPercent / 100;
+            if (sample > output_limit) {
+                sample = output_limit;
+            } else if (sample < -output_limit) {
+                sample = -output_limit;
+            }
+            io_buffer[i] = (int16_t)sample;
+        }
+
         size_t bytes_written = 0;
         ret = i2s_channel_write(s_tx_handle, io_buffer, bytes_read, &bytes_written, pdMS_TO_TICKS(120));
         if (ret != ESP_OK || bytes_written == 0) {
@@ -675,6 +704,7 @@ static void perform_loopback(int16_t *io_buffer)
     }
 
     (void)audio_amp_set(false);
+    set_runtime_volume(kVolumePercent);
     set_status(FACTORY_AUDIO_MODE_MONITOR, "LIVE", "Loopback stopped. Monitoring microphone.");
 }
 

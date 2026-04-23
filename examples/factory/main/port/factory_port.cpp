@@ -45,11 +45,7 @@ static void refresh_runtime_info()
     s_runtime_info.display_mode = display_info->mode_summary;
     s_runtime_info.touch_ready = factory_touch_is_ready();
     s_runtime_info.touch_status = runtime_touch_status();
-#ifdef CONFIG_FACTORY_BOOT_TOUCH_DIAGNOSTICS
-    s_runtime_info.boot_mode = "Touch diagnostics";
-#else
     s_runtime_info.boot_mode = "Home menu";
-#endif
 }
 
 }  // namespace

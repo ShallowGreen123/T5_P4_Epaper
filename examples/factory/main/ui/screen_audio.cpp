@@ -363,7 +363,7 @@ static void create_audio(lv_obj_t *parent)
         factory_ui_create_action_button(button_row, "Playback", action_btn_event_cb, (void *)static_cast<intptr_t>(AudioAction::Playback));
     lv_obj_set_width(play_btn, lv_pct(23));
     lv_obj_t *loop_btn =
-        factory_ui_create_action_button(button_row, "Loopback", action_btn_event_cb, (void *)static_cast<intptr_t>(AudioAction::Loopback));
+        factory_ui_create_action_button(button_row, "Safe Loop", action_btn_event_cb, (void *)static_cast<intptr_t>(AudioAction::Loopback));
     lv_obj_set_width(loop_btn, lv_pct(23));
     lv_obj_t *stop_btn =
         factory_ui_create_action_button(button_row, "Stop", action_btn_event_cb, (void *)static_cast<intptr_t>(AudioAction::Stop));

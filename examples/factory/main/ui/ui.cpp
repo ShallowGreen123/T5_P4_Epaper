@@ -228,11 +228,7 @@ extern "C" void factory_ui_init(void)
     scr_mgr_register(FACTORY_PAGE_SHUTDOWN, factory_placeholder_lifecycle(FACTORY_PAGE_SHUTDOWN));
     scr_mgr_register(FACTORY_PAGE_SLEEP, factory_placeholder_lifecycle(FACTORY_PAGE_SLEEP));
 
-#ifdef CONFIG_FACTORY_BOOT_TOUCH_DIAGNOSTICS
-    scr_mgr_switch(FACTORY_PAGE_TOUCH, false);
-#else
     scr_mgr_switch(FACTORY_PAGE_HOME, false);
-#endif
 
     create_low_power_popup();
     refresh_low_power_protection();
