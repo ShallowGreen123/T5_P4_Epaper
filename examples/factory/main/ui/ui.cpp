@@ -221,6 +221,7 @@ extern "C" void factory_ui_init(void)
     scr_mgr_register(FACTORY_PAGE_SD, factory_screen_sd_lifecycle());
     scr_mgr_register(FACTORY_PAGE_BATTERY, factory_screen_battery_lifecycle());
     scr_mgr_register(FACTORY_PAGE_AUDIO, factory_screen_audio_lifecycle());
+    scr_mgr_register(FACTORY_PAGE_CAMERA, factory_screen_camera_lifecycle());
 
     scr_mgr_register(FACTORY_PAGE_CLOCK, factory_placeholder_lifecycle(FACTORY_PAGE_CLOCK));
     scr_mgr_register(FACTORY_PAGE_LORA, factory_placeholder_lifecycle(FACTORY_PAGE_LORA));

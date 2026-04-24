@@ -112,6 +112,134 @@ config FACTORY_BATTERY_LOW_POWER_POLL_MS
 
 endmenu
 
+menu "Camera"
+
+config FACTORY_CAMERA_ENABLE
+    bool "Enable instant camera page"
+    default y
+    select ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
+    select ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
+    select ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER
+    select CAMERA_XCLK_USE_ESP_CLOCK_ROUTER
+
+choice FACTORY_CAMERA_SENSOR
+    prompt "Camera sensor"
+    depends on FACTORY_CAMERA_ENABLE
+    default FACTORY_CAMERA_SENSOR_OV2710
+
+    config FACTORY_CAMERA_SENSOR_OV2710
+        bool "OV2710"
+        select CAMERA_OV2710
+        select CAMERA_OV2710_MIPI_RAW10_1280X720_25FPS
+
+    config FACTORY_CAMERA_SENSOR_SC2336
+        bool "SC2336"
+        select CAMERA_SC2336
+        select CAMERA_SC2336_MIPI_RAW8_1280X720_30FPS
+
+    config FACTORY_CAMERA_SENSOR_OV5645
+        bool "OV5645"
+        select CAMERA_OV5645
+        select CAMERA_OV5645_MIPI_YUV422_1280X960_30FPS
+endchoice
+
+config FACTORY_CAMERA_I2C_FREQ_HZ
+    int "Camera SCCB/I2C frequency (Hz)"
+    depends on FACTORY_CAMERA_ENABLE
+    default 100000
+    range 10000 400000
+
+config FACTORY_CAMERA_ENABLE_POWER
+    bool "Enable camera rails through SGM38121"
+    depends on FACTORY_CAMERA_ENABLE
+    default y
+
+config FACTORY_CAMERA_DVDD1_MV
+    int "SGM38121 DVDD1 target voltage (mV, 0 disables)"
+    depends on FACTORY_CAMERA_ENABLE_POWER
+    default 0
+    range 0 1504
+
+config FACTORY_CAMERA_DVDD2_MV
+    int "SGM38121 DVDD2 target voltage (mV, 0 disables)"
+    depends on FACTORY_CAMERA_ENABLE_POWER
+    default 0
+    range 0 1504
+
+config FACTORY_CAMERA_AVDD1_MV
+    int "SGM38121 AVDD1 target voltage (mV)"
+    depends on FACTORY_CAMERA_ENABLE_POWER
+    default 1800
+    range 1504 3424
+
+config FACTORY_CAMERA_AVDD2_MV
+    int "SGM38121 AVDD2 target voltage (mV)"
+    depends on FACTORY_CAMERA_ENABLE_POWER
+    default 2800
+    range 1504 3424
+
+config FACTORY_CAMERA_RESET_GPIO
+    int "Camera RESET GPIO (-1 disables)"
+    depends on FACTORY_CAMERA_ENABLE
+    default -1
+    range -1 54
+
+config FACTORY_CAMERA_PWDN_GPIO
+    int "Camera PWDN GPIO (-1 disables)"
+    depends on FACTORY_CAMERA_ENABLE
+    default -1
+    range -1 54
+
+config FACTORY_CAMERA_XCLK_GPIO
+    int "Camera XCLK GPIO (-1 disables)"
+    depends on FACTORY_CAMERA_ENABLE
+    default -1
+    range -1 54
+
+config FACTORY_CAMERA_XCLK_FREQ_HZ
+    int "Camera XCLK frequency (Hz)"
+    depends on FACTORY_CAMERA_ENABLE
+    default 24000000
+    range 1000000 40000000
+
+config FACTORY_CAMERA_CAPTURE_WIDTH
+    int "Requested capture width"
+    depends on FACTORY_CAMERA_ENABLE
+    default 1280
+    range 160 2592
+
+config FACTORY_CAMERA_CAPTURE_HEIGHT
+    int "Requested capture height"
+    depends on FACTORY_CAMERA_ENABLE
+    default 720
+    range 120 1944
+
+config FACTORY_CAMERA_OUTPUT_WIDTH
+    int "Preview output width"
+    depends on FACTORY_CAMERA_ENABLE
+    default 640
+    range 160 1440
+
+config FACTORY_CAMERA_OUTPUT_HEIGHT
+    int "Preview output height"
+    depends on FACTORY_CAMERA_ENABLE
+    default 360
+    range 120 720
+
+config FACTORY_CAMERA_VIDEO_BUFFER_COUNT
+    int "V4L2 video buffer count"
+    depends on FACTORY_CAMERA_ENABLE
+    default 3
+    range 2 4
+
+config FACTORY_CAMERA_TASK_STACK_SIZE
+    int "Camera capture task stack size"
+    depends on FACTORY_CAMERA_ENABLE
+    default 8192
+    range 6144 16384
+
+endmenu
+
 menu "Audio"
 
 config FACTORY_AUDIO_SAMPLE_RATE

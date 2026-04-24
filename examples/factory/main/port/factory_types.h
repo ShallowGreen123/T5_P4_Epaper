@@ -24,6 +24,7 @@ typedef enum factory_page_id {
     FACTORY_PAGE_DISPLAY,
     FACTORY_PAGE_TOUCH,
     FACTORY_PAGE_AUDIO,
+    FACTORY_PAGE_CAMERA,
 } factory_page_id_t;
 
 #define FACTORY_SD_MAX_ENTRIES 64

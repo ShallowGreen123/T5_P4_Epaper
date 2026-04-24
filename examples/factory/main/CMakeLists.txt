@@ -15,6 +15,7 @@ idf_component_register(
         "ui"
     REQUIRES
         esp_event
+        esp_cam_sensor
         esp_driver_gpio
         esp_driver_i2c
         esp_driver_i2s
@@ -23,7 +24,9 @@ idf_component_register(
         esp_lcd
         esp_netif
         esp_psram
+        esp_sccb_intf
         esp_timer
+        esp_video
         esp_wifi
         fatfs
         fastepd

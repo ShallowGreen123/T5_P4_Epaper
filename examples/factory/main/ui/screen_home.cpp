@@ -33,6 +33,7 @@ static const MenuItem kMenuItems[] = {
     {LV_SYMBOL_GPS, "GPS", FACTORY_PAGE_GPS, 0},
     {LV_SYMBOL_REFRESH, "Adjust", FACTORY_PAGE_ADJUST, 0},
     {LV_SYMBOL_AUDIO, "Audio", FACTORY_PAGE_AUDIO, 0},
+    {LV_SYMBOL_IMAGE, "Camera", FACTORY_PAGE_CAMERA, 0},
     {LV_SYMBOL_POWER, "Shutdown", FACTORY_PAGE_SHUTDOWN, 1},
     {LV_SYMBOL_PAUSE, "Sleep", FACTORY_PAGE_SLEEP, 1},
 };

@@ -2,7 +2,7 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: '>=4.1.0'
+    version: '>=5.4'
   # # Put list of dependencies here
   # # For components maintained by Espressif:
   # component: "~1.0.0"
@@ -15,6 +15,9 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   espressif/esp_lcd_touch_gt911: ^1.2.0~2
+  espressif/esp_cam_sensor: ^2.0.1
+  espressif/esp_sccb_intf: ^0.0.8
+  espressif/esp_video: ~2.0
   espressif/esp_hosted: 2.12.3
   espressif/esp_wifi_remote: ^1.5.0
   wngfra/esp_io_expander_pca9535: ^1.0.1
