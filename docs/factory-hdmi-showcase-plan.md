@@ -477,3 +477,4 @@ Camera 和 Audio 已有独立页面。
 9. 做 Start / Stop 循环测试
 10. 再进入 Camera / Audio / SD Video 扩展
 
+尚未做实机 HDMI 画面验证，下一步建议上板测试 Pattern/Motion、Start/Stop 循环和不插 HDMI 时的 ready 状态。
