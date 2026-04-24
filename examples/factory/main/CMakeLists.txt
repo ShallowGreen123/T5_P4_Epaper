@@ -24,6 +24,7 @@ idf_component_register(
         esp_lcd
         esp_netif
         esp_psram
+        esp_hw_support
         esp_sccb_intf
         esp_timer
         esp_video

@@ -24,6 +24,26 @@ config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
     
 endmenu
 
+menu "HDMI"
+
+config FACTORY_HDMI_ENABLE
+    bool "Enable HDMI Showcase page"
+    default y
+
+config FACTORY_HDMI_TARGET_FPS
+    int "HDMI target FPS"
+    depends on FACTORY_HDMI_ENABLE
+    default 30
+    range 1 60
+
+config FACTORY_HDMI_TASK_STACK_SIZE
+    int "HDMI render task stack size"
+    depends on FACTORY_HDMI_ENABLE
+    default 6144
+    range 4096 16384
+
+endmenu
+
 menu "Touch"
 
 config FACTORY_TOUCH_I2C_ADDR
