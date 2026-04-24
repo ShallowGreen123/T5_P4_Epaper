@@ -134,3 +134,9 @@
 - `BOARD_HDMI_DDC_SDA` / `BOARD_HDMI_DDC_SCL` are the HDMI DDC bus on GPIO9 / GPIO10.
 - They are used to read monitor EDID data and are not the LT8912B configuration I2C bus.
 - LT8912B configuration I2C remains on GPIO7 / GPIO8.
+
+## BOOT 按键
+
+| 功能 | 现有宏 | 映射 | 来源 | 备注 |
+| --- | --- | --- | --- | --- |
+| 设备配置按键 / factory 全刷按键 | `BOARD_BOOT_PIN` / `FACTORY_BOOT_BUTTON_GPIO` | GPIO35 | 原理图 Page 5 + ESP_BOOT0 | 上拉，低电平触发；factory 示例中按下一次触发 e-paper 全刷 |

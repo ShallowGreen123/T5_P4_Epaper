@@ -1,5 +1,14 @@
 menu "Factory Example"
 
+
+config FACTORY_BOOT_BUTTON_GPIO
+    int "BOOT button GPIO for full refresh (-1 disables)"
+    default 35
+    range -1 54
+    help
+        Pressing the BOOT button requests one e-paper full refresh. Keep the
+        default GPIO0 for the ESP32-P4 BOOT key.
+
 menu "Display"
 
 config FACTORY_DISPLAY_TEST_LOCAL_REFRESH_MS
@@ -11,7 +20,7 @@ config FACTORY_DISPLAY_TEST_FULL_REFRESH_MS
     int "Display test automatic full refresh period (ms)"
     default 30000
     range 1000 600000
-
+    
 endmenu
 
 menu "Touch"
