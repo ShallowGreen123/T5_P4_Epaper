@@ -14,7 +14,7 @@ namespace {
 static const char *TAG = "factory_main";
 
 #ifndef FACTORY_BOOT_BUTTON_GPIO
-#define FACTORY_BOOT_BUTTON_GPIO 0
+#define FACTORY_BOOT_BUTTON_GPIO 35
 #endif
 
 constexpr TickType_t kBootButtonDebounceTicks = pdMS_TO_TICKS(40);

@@ -7,7 +7,8 @@ config FACTORY_BOOT_BUTTON_GPIO
     range -1 54
     help
         Pressing the BOOT button requests one e-paper full refresh. Keep the
-        default GPIO0 for the ESP32-P4 BOOT key.
+        default GPIO35 for the ESP32-P4 BOOT key. The button is pulled up and
+        active low.
 
 menu "Display"
 

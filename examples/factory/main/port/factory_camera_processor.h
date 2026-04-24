@@ -16,6 +16,15 @@ bool factory_camera_process_frame(
     uint32_t out_width,
     uint32_t out_height);
 
+bool factory_camera_process_frame_to_grayscale(
+    const void *input,
+    uint32_t width,
+    uint32_t height,
+    uint32_t pixel_format,
+    uint8_t *output_gray,
+    uint32_t out_width,
+    uint32_t out_height);
+
 bool factory_camera_convert_to_grayscale(
     const void *input,
     uint8_t *gray,
@@ -34,6 +43,12 @@ bool factory_camera_scale_nearest(
 bool factory_camera_dither_bayer4(
     const uint8_t *gray,
     uint8_t *output_1bpp,
+    uint32_t width,
+    uint32_t height);
+
+bool factory_camera_pack_gray4(
+    const uint8_t *gray,
+    uint8_t *output_4bpp,
     uint32_t width,
     uint32_t height);
 

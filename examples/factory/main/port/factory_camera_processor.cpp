@@ -152,6 +152,69 @@ extern "C" bool factory_camera_dither_bayer4(
     return true;
 }
 
+extern "C" bool factory_camera_pack_gray4(
+    const uint8_t *gray,
+    uint8_t *output_4bpp,
+    uint32_t width,
+    uint32_t height)
+{
+    if (gray == nullptr || output_4bpp == nullptr || width == 0 || height == 0) {
+        return false;
+    }
+
+    const size_t pitch = (width + 1U) / 2U;
+    memset(output_4bpp, 0xFF, pitch * height);
+
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint8_t *src_row = gray + (size_t)y * width;
+        uint8_t *dst_row = output_4bpp + (size_t)y * pitch;
+        for (uint32_t x = 0; x < width; ++x) {
+            const uint8_t gray4 = (uint8_t)(src_row[x] >> 4);
+            uint8_t &dst = dst_row[x >> 1];
+            if ((x & 1U) == 0U) {
+                dst = (uint8_t)((dst & 0x0F) | (gray4 << 4));
+            } else {
+                dst = (uint8_t)((dst & 0xF0) | gray4);
+            }
+        }
+    }
+
+    return true;
+}
+
+extern "C" bool factory_camera_process_frame_to_grayscale(
+    const void *input,
+    uint32_t width,
+    uint32_t height,
+    uint32_t pixel_format,
+    uint8_t *output_gray,
+    uint32_t out_width,
+    uint32_t out_height)
+{
+    if (input == nullptr || output_gray == nullptr || width == 0 || height == 0 || out_width == 0 || out_height == 0) {
+        return false;
+    }
+
+    const size_t src_pixels = (size_t)width * height;
+    uint8_t *gray = static_cast<uint8_t *>(alloc_image_buffer(src_pixels));
+    if (gray == nullptr) {
+        ESP_LOGE(TAG, "failed to allocate grayscale buffer (%u x %u)", (unsigned)width, (unsigned)height);
+        return false;
+    }
+
+    bool ok = factory_camera_convert_to_grayscale(input, gray, width, height, pixel_format);
+    if (ok) {
+        if (width == out_width && height == out_height) {
+            memcpy(output_gray, gray, src_pixels);
+        } else {
+            ok = factory_camera_scale_nearest(gray, width, height, output_gray, out_width, out_height);
+        }
+    }
+
+    free(gray);
+    return ok;
+}
+
 extern "C" bool factory_camera_process_frame(
     const void *input,
     uint32_t width,
@@ -165,39 +228,18 @@ extern "C" bool factory_camera_process_frame(
         return false;
     }
 
-    const size_t src_pixels = (size_t)width * height;
     const size_t dst_pixels = (size_t)out_width * out_height;
-    uint8_t *gray = static_cast<uint8_t *>(alloc_image_buffer(src_pixels));
+    uint8_t *gray = static_cast<uint8_t *>(alloc_image_buffer(dst_pixels));
     if (gray == nullptr) {
-        ESP_LOGE(TAG, "failed to allocate grayscale buffer (%u x %u)", (unsigned)width, (unsigned)height);
+        ESP_LOGE(TAG, "failed to allocate output grayscale buffer (%u x %u)", (unsigned)out_width, (unsigned)out_height);
         return false;
     }
 
-    bool ok = factory_camera_convert_to_grayscale(input, gray, width, height, pixel_format);
-    if (!ok) {
-        free(gray);
-        return false;
-    }
-
-    if (width == out_width && height == out_height) {
-        ok = factory_camera_dither_bayer4(gray, static_cast<uint8_t *>(output_1bpp), out_width, out_height);
-        free(gray);
-        return ok;
-    }
-
-    uint8_t *scaled = static_cast<uint8_t *>(alloc_image_buffer(dst_pixels));
-    if (scaled == nullptr) {
-        ESP_LOGE(TAG, "failed to allocate scaled buffer (%u x %u)", (unsigned)out_width, (unsigned)out_height);
-        free(gray);
-        return false;
-    }
-
-    ok = factory_camera_scale_nearest(gray, width, height, scaled, out_width, out_height);
+    bool ok = factory_camera_process_frame_to_grayscale(input, width, height, pixel_format, gray, out_width, out_height);
     if (ok) {
-        ok = factory_camera_dither_bayer4(scaled, static_cast<uint8_t *>(output_1bpp), out_width, out_height);
+        ok = factory_camera_dither_bayer4(gray, static_cast<uint8_t *>(output_1bpp), out_width, out_height);
     }
 
-    free(scaled);
     free(gray);
     return ok;
 }

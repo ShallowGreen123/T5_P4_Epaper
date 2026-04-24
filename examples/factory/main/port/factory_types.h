@@ -25,6 +25,7 @@ typedef enum factory_page_id {
     FACTORY_PAGE_TOUCH,
     FACTORY_PAGE_AUDIO,
     FACTORY_PAGE_CAMERA,
+    FACTORY_PAGE_HDMI,
 } factory_page_id_t;
 
 #define FACTORY_SD_MAX_ENTRIES 64
@@ -76,6 +77,29 @@ typedef struct factory_page_info {
     const char *detail;
     const char *status_text;
 } factory_page_info_t;
+
+typedef enum factory_hdmi_mode {
+    FACTORY_HDMI_MODE_PATTERN = 0,
+    FACTORY_HDMI_MODE_MOTION,
+    FACTORY_HDMI_MODE_CAMERA,
+    FACTORY_HDMI_MODE_AUDIO,
+    FACTORY_HDMI_MODE_SD_VIDEO,
+} factory_hdmi_mode_t;
+
+typedef struct factory_hdmi_state {
+    bool initialized;
+    bool powered;
+    bool ready;
+    bool running;
+    factory_hdmi_mode_t mode;
+    uint16_t width;
+    uint16_t height;
+    uint32_t frame_count;
+    uint32_t fps;
+    uint32_t free_psram;
+    const char *status_text;
+    const char *last_error;
+} factory_hdmi_state_t;
 
 typedef struct factory_sd_state {
     bool mounted;
