@@ -1,6 +1,7 @@
 #include "factory_display.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -19,6 +20,7 @@ static const char *TAG = "factory_display";
 constexpr int kDrawBufPixels = FACTORY_BOARD_WIDTH * FACTORY_DRAW_BUF_LINES;
 constexpr int kFramebufferPitch1bpp = (FACTORY_BOARD_WIDTH + 7) / 8;
 constexpr int kFramebufferPitch4bpp = FACTORY_BOARD_WIDTH / 2;
+constexpr size_t kFramebufferBytes1bpp = (size_t)kFramebufferPitch1bpp * FACTORY_BOARD_HEIGHT;
 constexpr uint8_t kDisableMaxPartialRefreshesBeforeFull = 0;
 constexpr uint8_t kMinMaxPartialRefreshesBeforeFull = 5;
 constexpr uint8_t kMaxMaxPartialRefreshesBeforeFull = 30;
@@ -31,7 +33,7 @@ constexpr uint8_t kMaxPartialRefreshesStep = 5;
 // visible flash.
 constexpr uint8_t kDefaultMaxPartialRefreshesBeforeFull = kDisableMaxPartialRefreshesBeforeFull;
 constexpr int kInitialFullRefreshMode = CLEAR_SLOW;
-constexpr int kRuntimeFullRefreshMode = CLEAR_FAST;
+constexpr int kRuntimeFullRefreshMode = CLEAR_SLOW;
 constexpr uint8_t kBayer4[4][4] = {
     {0, 8, 2, 10},
     {12, 4, 14, 6},
@@ -43,6 +45,7 @@ static FASTEPD s_epaper;
 static lv_color_t *s_draw_buf_1 = nullptr;
 static lv_color_t *s_draw_buf_2 = nullptr;
 static uint8_t *s_framebuffer = nullptr;
+static uint8_t *s_full_refresh_backup_1bpp = nullptr;
 static bool s_use_4bpp_color = false;
 static bool s_enable_dither = false;
 static bool s_low_flash = true;
@@ -106,6 +109,73 @@ static uint8_t normalize_max_partial_refreshes_before_full(uint8_t count)
 static int framebuffer_pitch()
 {
     return s_use_4bpp_color ? kFramebufferPitch4bpp : kFramebufferPitch1bpp;
+}
+
+static void *alloc_display_buffer(size_t size)
+{
+    void *buffer = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buffer == nullptr) {
+        buffer = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    }
+    return buffer;
+}
+
+static bool ensure_full_refresh_backup_1bpp()
+{
+    if (s_full_refresh_backup_1bpp != nullptr) {
+        return true;
+    }
+
+    s_full_refresh_backup_1bpp = static_cast<uint8_t *>(alloc_display_buffer(kFramebufferBytes1bpp));
+    if (s_full_refresh_backup_1bpp == nullptr) {
+        ESP_LOGE(TAG, "failed to allocate 1bpp full-refresh backup buffer");
+        return false;
+    }
+    return true;
+}
+
+static bool run_monochrome_recondition_full_refresh()
+{
+    if (s_framebuffer == nullptr || !ensure_full_refresh_backup_1bpp()) {
+        return false;
+    }
+
+    memcpy(s_full_refresh_backup_1bpp, s_framebuffer, kFramebufferBytes1bpp);
+
+    // if (s_epaper.clearBlack(true) != BBEP_SUCCESS) {
+    //     s_framebuffer = s_epaper.currentBuffer();
+    //     if (s_framebuffer != nullptr) {
+    //         memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
+    //     }
+    //     ESP_LOGW(TAG, "clearBlack failed during 1bpp recondition refresh");
+    //     return false;
+    // }
+
+    // s_framebuffer = s_epaper.currentBuffer();
+    // if (s_framebuffer == nullptr) {
+    //     ESP_LOGE(TAG, "currentBuffer returned null after 1bpp clearBlack");
+    //     return false;
+    // }
+
+    if (s_epaper.clearWhite(true) != BBEP_SUCCESS) {
+        memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
+        ESP_LOGW(TAG, "clearWhite failed during 1bpp recondition refresh");
+        return false;
+    }
+
+    s_framebuffer = s_epaper.currentBuffer();
+    if (s_framebuffer == nullptr) {
+        ESP_LOGE(TAG, "currentBuffer returned null after 1bpp clearWhite");
+        return false;
+    }
+
+    memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
+    if (s_epaper.fullUpdate(CLEAR_NONE, true) != BBEP_SUCCESS) {
+        ESP_LOGW(TAG, "1bpp redraw after white recondition failed");
+        return false;
+    }
+
+    return true;
 }
 
 static void update_mode_summary()
@@ -206,8 +276,10 @@ static void flush_to_panel()
         s_partial_refresh_count >= s_max_partial_refreshes_before_full;
 
     if (s_force_full_refresh || !s_display_started || auto_full_refresh) {
-        const int clear_mode = s_display_started ? kRuntimeFullRefreshMode : kInitialFullRefreshMode;
-        s_epaper.fullUpdate(clear_mode, true);
+        if (!run_monochrome_recondition_full_refresh()) {
+            const int clear_mode = s_display_started ? kRuntimeFullRefreshMode : kInitialFullRefreshMode;
+            s_epaper.fullUpdate(clear_mode, true);
+        }
         s_force_full_refresh = false;
         s_display_started = true;
         s_partial_refresh_count = 0;
