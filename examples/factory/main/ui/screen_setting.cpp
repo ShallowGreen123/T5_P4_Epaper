@@ -14,7 +14,7 @@ static void create_setting(lv_obj_t *parent)
     factory_ui_apply_screen(parent);
     factory_ui_create_back_button(parent, "Setting");
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 82);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 94, 92);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
