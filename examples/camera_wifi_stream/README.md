@@ -1,25 +1,49 @@
 # camera_wifi_stream
 
-Minimal ESP-IDF MJPEG streaming example for T5-P4 E-Paper. It powers the MIPI camera through SGM38121, starts ESP32-P4 MIPI-CSI capture, connects to WiFi through the onboard ESP32-C6 hosted link, and serves:
+## What This Example Does
 
-- `GET /` - simple page with a live image
-- `GET /stream` - `multipart/x-mixed-replace` MJPEG stream
+This example powers an onboard MIPI camera through `SGM38121`, captures frames on the ESP32-P4, encodes them as MJPEG, and serves a live stream over Wi-Fi.
 
-Build:
+It provides:
 
-```sh
-idf.py set-target esp32p4
-idf.py menuconfig
-idf.py build
+- `GET /` for a simple preview page
+- `GET /stream` for the MJPEG stream
+
+## Prerequisites
+
+- A LilyGo T5-P4 E-Paper board with a supported camera module.
+- The onboard ESP32-C6 must be flashed with compatible `esp-hosted` slave firmware.
+- Wi-Fi SSID and password configured in `idf.py menuconfig`.
+- Default camera setup targets `OV2710`; change the sensor settings in `menuconfig` if your hardware is different.
+- Optional: adjust AVDD and DVDD rails in `Camera WiFi Stream Configuration` if your sensor requires them.
+
+## Build and Flash
+
+```bash
+idf.py -C examples/camera_wifi_stream set-target esp32p4
+idf.py -C examples/camera_wifi_stream menuconfig
+idf.py -C examples/camera_wifi_stream build
+idf.py -C examples/camera_wifi_stream -p <PORT> flash monitor
 ```
 
-Set `Camera WiFi Stream Configuration -> WiFi SSID/password` before flashing.
+## Expected Log Output
 
-Streaming defaults are tuned for the ESP32-C6 hosted WiFi link: JPEG quality 88, a
-12 fps MJPEG output cap, 4 capture buffers, and WiFi power save disabled. If the
-picture is still soft, first adjust the lens focus, then try raising `JPEG quality`;
-if it stutters, lower `Maximum MJPEG stream FPS`.
+You should see lines similar to:
 
-SGM38121 `DVDD1` and `DVDD2` default to `0 mV`, which keeps those outputs
-disabled. Set non-zero DVDD targets in menuconfig only if your camera module
-needs those rails.
+```text
+I (...) camera_wifi_stream: ESP32-P4 camera WiFi MJPEG stream example
+I (...) camera_wifi_stream: SGM38121 CHIP_REV=0x80
+I (...) camera_wifi_stream: video driver=<...> card=<...> bus=<...>
+I (...) camera_wifi_stream: camera chip id: pid=0x2710
+I (...) camera_wifi_stream: WiFi connected, IPv4=192.168.x.x
+I (...) camera_wifi_stream: HTTP server ready
+I (...) camera_wifi_stream: Open http://192.168.x.x/ or http://192.168.x.x/stream
+```
+
+When a browser connects to `/stream`, the log also reports MJPEG client connect and disconnect events.
+
+## Troubleshooting
+
+- If the example stops at camera initialization, verify `SGM38121` rail settings, the selected sensor, and camera ribbon seating.
+- If Wi-Fi never comes up, make sure the ESP32-C6 hosted slave firmware is installed and the SSID is not empty.
+- If the stream is unstable, lower `Maximum MJPEG stream FPS`, reduce resolution, or improve Wi-Fi signal quality.

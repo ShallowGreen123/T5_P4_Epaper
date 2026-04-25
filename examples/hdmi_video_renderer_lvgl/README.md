@@ -1,65 +1,41 @@
-# HDMI LVGL Demo Runner
+# hdmi_video_renderer_lvgl
 
-This example runs LVGL demos on the LilyGo T5-P4 HDMI path and outputs the UI through the LT8912B HDMI bridge.
+## What This Example Does
 
-The application is a dedicated LVGL demo runner. It does not mount an SD card, does not play MP4 files, and does not require any media file by default.
+This example drives an HDMI monitor with an `LVGL` demo instead of video playback. It allocates a full-screen LVGL draw buffer in PSRAM, converts the output to RGB888, and flushes frames through the LT8912B HDMI path.
 
-## Features
+## Prerequisites
 
-- HDMI output through the existing T5-P4 BSP display bring-up path.
-- Default display mode: 800x600@60Hz, RGB888.
-- LVGL v8.4 managed component.
-- Menuconfig-selectable demos:
-  - Benchmark (default)
-  - Stress
-  - Widgets
-- Widgets demo uses slideshow mode so it is useful without touch, keyboard, or encoder input.
+- A LilyGo T5-P4 board configured for HDMI output.
+- An HDMI monitor connected to the board.
+- PSRAM enabled as required by the example defaults.
+- Optional: choose the startup demo in `idf.py menuconfig` under `HDMI LVGL Demo Configuration`.
 
-## Build And Flash
+## Build and Flash
 
-From the repository root:
-
-```sh
+```bash
 idf.py -C examples/hdmi_video_renderer_lvgl set-target esp32p4
-idf.py -C examples/hdmi_video_renderer_lvgl build
-idf.py -C examples/hdmi_video_renderer_lvgl flash monitor
-```
-
-Connect an HDMI monitor before or during boot. The BSP initializes the LT8912B bridge and the selected LVGL demo starts automatically.
-
-## Select A Demo
-
-Open menuconfig:
-
-```sh
 idf.py -C examples/hdmi_video_renderer_lvgl menuconfig
+idf.py -C examples/hdmi_video_renderer_lvgl build
+idf.py -C examples/hdmi_video_renderer_lvgl -p <PORT> flash monitor
 ```
 
-Then select:
+## Expected Log Output
+
+You should see lines similar to:
 
 ```text
-HDMI LVGL Demo Configuration
-  Select LVGL demo
+I (...) hdmi_lvgl: Starting HDMI LVGL Demo Runner
+I (...) hdmi_lvgl: Free SPIRAM before init: <bytes>
+I (...) hdmi_lvgl: Display timing: 800x600, DSI lane bitrate: <...> Mbps
+I (...) hdmi_lvgl: Allocated LVGL draw buffer=<...> bytes, HDMI flush buffer=<...> bytes
+I (...) hdmi_lvgl: Starting LVGL Benchmark demo
 ```
 
-Choose one of:
+During runtime, the log also prints periodic `Flushed LVGL frame` messages.
 
-- `Benchmark`
-- `Stress`
-- `Widgets`
+## Troubleshooting
 
-The default is `Benchmark`.
-
-## HDMI Settings
-
-The default HDMI setting is:
-
-```text
-Board Support Package (T5-P4 E-Paper)
-  Display
-    Use LT8912B HDMI output
-    Select HDMI resolution: 800x600@60HZ
-    Select LCD color format: RGB888
-```
-
-Higher HDMI resolutions can be selected from the BSP menu, but they use more PSRAM and may require performance tuning.
+- If initialization fails immediately, confirm the project is still configured for `CONFIG_BSP_LCD_TYPE_HDMI=y` and RGB888 output.
+- If the screen stays black, re-check the HDMI monitor, cable, and board power.
+- If PSRAM allocation fails, keep the default memory settings and avoid shrinking available external RAM.

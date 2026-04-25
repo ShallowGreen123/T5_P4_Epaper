@@ -1,36 +1,41 @@
-# USB UAC Example (LilyGo T5-P4 E-Paper)
+# usb_device_uac
 
-This example turns the T5-P4 E-Paper into a USB Audio Class (UAC) device.
+## What This Example Does
 
-- USB speaker playback (host -> T5-P4)
-- USB microphone capture (T5-P4 -> host)
-- Host-driven volume and mute control
+This example turns the board into a USB Audio Class device. A connected host can send audio to the board speaker, capture audio from the onboard microphone, and control mute and volume from the USB side.
 
-Internally it uses the onboard ES8311 codec and enables the speaker amplifier through PCA9535 IO expander (IO5).
+## Prerequisites
 
-## Hardware Required
-
-- LilyGo T5-P4 E-Paper (`esp32p4`)
-- USB Type-C data cable
-- Speaker/headphone connected to the board audio path
-
-## Configuration
-
-Use `idf.py menuconfig`:
-
-- `Example Configuration` -> select `LilyGo T5-P4 E-Paper`
-- `USB Device UAC` -> configure speaker/microphone channels and sample rate
-
-Note: microphone channel count is supported up to 2 channels.
+- A LilyGo T5-P4 board with the onboard `ES8311` audio codec path available.
+- A USB data connection to a host computer.
+- The default board support package configuration for the audio path.
+- Optional: change channel counts, sample rate, VID, PID, or product strings in `idf.py menuconfig`.
 
 ## Build and Flash
 
 ```bash
-idf.py set-target esp32p4
-idf.py build flash monitor
+idf.py -C examples/usb_device_uac set-target esp32p4
+idf.py -C examples/usb_device_uac build
+idf.py -C examples/usb_device_uac -p <PORT> flash monitor
 ```
 
-## Expected Behavior
+## Expected Log Output
 
-After flashing, connect the board USB port to a PC.
-The PC should enumerate a new USB audio device. Select it as input/output to play audio to the board speaker and record from the board microphone.
+You should see lines similar to:
+
+```text
+I (...) usb_device_uac: UAC Device Start, Version: <major>.<minor>.<patch>
+I (...) usb_device_uac: USB mounted
+Speaker interface 1-<alt> opened
+Microphone interface 2-<alt> opened
+I (...) usb_uac_main: uac_device_set_volume_cb: <value>
+I (...) usb_uac_main: uac_device_set_mute_cb: <value>
+```
+
+Exact interface numbers can vary with configuration.
+
+## Troubleshooting
+
+- If the host never enumerates the device, start with USB cable quality and host-side USB permissions or drivers.
+- If playback works but recording does not, check the onboard I2S read path and the selected microphone channel count.
+- If audio is distorted, keep the sample rate and channel configuration aligned between the host and `menuconfig`.

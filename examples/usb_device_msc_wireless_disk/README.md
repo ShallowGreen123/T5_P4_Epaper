@@ -1,65 +1,45 @@
-# USB MSC Wireless Disk (T5-P4 E-Paper)
+# usb_device_msc_wireless_disk
 
-This example turns the T5-P4 E-Paper into:
+## What This Example Does
 
-- a USB MSC disk (visible on the PC file explorer), and
-- a Wi-Fi file manager (upload/download/delete via web page).
+This example exposes the same FAT filesystem through two paths at once:
 
-Both paths access the same FAT filesystem on the external microSD card.
+- USB Mass Storage Class, so a PC can access the card as a removable disk.
+- A browser-based Wi-Fi file manager, so you can upload, download, and delete files over HTTP.
 
-## Hardware Requirements
+## Prerequisites
 
-- Board: LilyGo T5-P4 E-Paper (`esp32p4`)
-- microSD card inserted in the onboard slot
-- USB data cable connected to the board USB port
-- Onboard ESP32-C6 flashed with `esp-hosted` slave firmware
-  - See `docs/esp-hosted-c6-Slave.md`
+- A LilyGo T5-P4 E-Paper board.
+- A microSD card inserted in the onboard slot.
+- A USB data cable connected to the board.
+- The onboard ESP32-C6 flashed with compatible `esp-hosted` slave firmware for Wi-Fi.
+- Optional: configure AP or STA settings in `menuconfig` or through the web UI.
 
-## Default Storage and Pins
-
-The example defaults to SDSPI on T5-P4:
-
-- `MISO = GPIO44`
-- `SCK  = GPIO45`
-- `MOSI = GPIO46`
-- `CS   = GPIO47`
-
-Mount path is `/disk`.
-
-## Build
+## Build and Flash
 
 ```bash
-idf.py set-target esp32p4
-idf.py build
+idf.py -C examples/usb_device_msc_wireless_disk set-target esp32p4
+idf.py -C examples/usb_device_msc_wireless_disk build
+idf.py -C examples/usb_device_msc_wireless_disk -p <PORT> flash monitor
 ```
 
-## Flash
+## Expected Log Output
 
-```bash
-idf.py -p <PORT> flash monitor
+You should see lines similar to:
+
+```text
+I (...) app_main: Mounting FAT filesystem
+I (...) app_main: using external sdcard
+I (...) app_main: USB MSC initialization DONE
+I (...) file_server: Starting HTTP Server
+I (...) app_wifi: wifi_init_softap finished.SSID:<ssid> password:<password>
+I (...) app_wifi: got ip:192.168.4.1
 ```
 
-## Runtime Behavior
+During uploads and downloads, the HTTP server also prints file activity such as `Starting upload`, `File writing complete`, and `Sending file`.
 
-1. On boot, the SD card is mounted as FAT.
-2. TinyUSB MSC starts and exports the SD card to the host.
-3. Wi-Fi starts with AP/STA auto fallback:
-   - if STA credentials are configured, mode is AP+STA;
-   - if STA credentials are empty, mode is AP only.
-4. Open `http://192.168.4.1` to manage files over HTTP.
+## Troubleshooting
 
-## Wi-Fi Configuration
-
-You can configure Wi-Fi in either way:
-
-- `menuconfig -> USB MSC Device Demo -> Wi-Fi Settings`
-- `settings` page in the web UI (saved to NVS, then reboot)
-
-NVS keys are kept compatible with the original UI:
-`wifimode`, `apssid`, `appasswd`, `stassid`, `stapasswd`.
-
-## Notes
-
-- `/reset_msc` triggers USB re-enumeration to refresh host-side file view.
-- If hosted Wi-Fi init fails, check C6 firmware and SDIO link first.
-- If SD mount fails, verify card insertion and SDSPI pin configuration.
+- If the card does not appear over USB, check the SD mount logs first because the MSC layer depends on the filesystem coming up cleanly.
+- If Wi-Fi does not start, verify the ESP32-C6 hosted firmware and the AP or STA settings stored in NVS.
+- If the PC file explorer does not refresh after remote changes, use the built-in MSC reset path to force USB re-enumeration.

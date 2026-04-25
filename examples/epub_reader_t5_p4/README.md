@@ -1,39 +1,39 @@
-# T5-P4 EPUB Reader
+# epub_reader_t5_p4
 
-This example ports the core reader flow from `atomic14/diy-esp32-epub-reader` onto the LilyGo T5-P4 E-paper board.
+## What This Example Does
 
-Implemented in this example:
+This example turns the T5-P4 E-Paper board into a simple EPUB reader. It scans the SD card for books, renders text and images on the e-paper panel, and lets you navigate with the GT911 touch screen.
 
-- EPUB scan from `/sdcard/books`, falling back to `/sdcard`
-- Book list, table of contents, and paged reading
-- Basic JPEG and PNG rendering inside EPUB content
-- GT911 touch navigation with a 3-button bottom toolbar
-- FastEPD-native 4bpp grayscale rendering
+## Prerequisites
 
-Not included in v1:
+- A LilyGo T5-P4 E-Paper board.
+- A microSD card inserted in the onboard slot.
+- One or more `.epub` files stored in `/sdcard/books` or in the SD card root.
+- Optional note: the current implementation does not include deep sleep restore, battery UI, or CJK font support.
 
-- Deep sleep and RTC restore
-- Battery indicator
-- CJK font support
-- Gesture navigation
-
-## Build
+## Build and Flash
 
 ```bash
-idf.py -C examples/epub_reader_t5_p4 set-target esp32p4 build
+idf.py -C examples/epub_reader_t5_p4 set-target esp32p4
+idf.py -C examples/epub_reader_t5_p4 build
+idf.py -C examples/epub_reader_t5_p4 -p <PORT> flash monitor
 ```
 
-## Usage
+## Expected Log Output
 
-1. Copy `.epub` files to the SD card under `books/` or the SD root.
-2. Flash the example and boot the board.
-3. Use the bottom toolbar:
-   - Left: `Prev`
-   - Middle: `Next`
-   - Right: `Select` or `Back`
+You should see lines similar to:
 
-## Notes
+```text
+I (...) t5_epub_board: XL9555 initialized
+I (...) t5_epub_board: GT911 initialized
+I (...) t5_epub_board: Panel dimensions: 1440x720
+I (...) t5_epub_board: Display ready: 1440x720
+```
 
-- This example reuses the repository-level `components/fastepd` and `components/sensorlib` components.
-- Third-party sources bundled under `components/epub_3p` include TinyXML2, miniz, PNGdec, and TJpgDec. Their original license headers are preserved in the vendored files.
-- Core EPUB parsing and layout logic is adapted from `atomic14/diy-esp32-epub-reader` with minimal structural changes plus T5-P4 specific fixes.
+Most of the runtime behavior is visible on the screen rather than in the serial log.
+
+## Troubleshooting
+
+- If the UI boots but no books are listed, confirm the SD card mounts correctly and the `.epub` files are under `books/` or the card root.
+- If touch does not work, check the GT911 path and board revision-specific reset/address behavior.
+- If a book renders incorrectly, try a simpler EPUB first because advanced layouts and some fonts are not fully supported yet.
