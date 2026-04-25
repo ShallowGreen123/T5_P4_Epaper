@@ -38,8 +38,10 @@ namespace {
 
 static const char *TAG = "screen_camera";
 
-constexpr uint32_t kPhotoWidth = CONFIG_FACTORY_CAMERA_OUTPUT_WIDTH;
-constexpr uint32_t kPhotoHeight = CONFIG_FACTORY_CAMERA_OUTPUT_HEIGHT;
+constexpr uint32_t kPhotoWidth = 800;
+constexpr uint32_t kPhotoHeight =
+    (uint32_t)(((uint64_t)kPhotoWidth * CONFIG_FACTORY_CAMERA_OUTPUT_HEIGHT) /
+               CONFIG_FACTORY_CAMERA_OUTPUT_WIDTH);
 constexpr size_t kPhotoPixels = (size_t)kPhotoWidth * kPhotoHeight;
 constexpr size_t kPhotoPitch1bpp = (kPhotoWidth + 7U) / 8U;
 constexpr size_t kPhotoBytes1bpp = kPhotoPitch1bpp * kPhotoHeight;
@@ -47,7 +49,7 @@ constexpr size_t kPhotoPitch4bpp = (kPhotoWidth + 1U) / 2U;
 constexpr size_t kPhotoBytes4bpp = kPhotoPitch4bpp * kPhotoHeight;
 constexpr size_t kPaletteBytes1bpp = sizeof(lv_color32_t) * 2U;
 constexpr size_t kPaletteBytes4bpp = sizeof(lv_color32_t) * 16U;
-constexpr uint32_t kUiRefreshMs = 250;
+constexpr lv_coord_t kPhotoStageHeight = 480;
 
 enum class CameraState {
     Idle,
@@ -67,7 +69,6 @@ static lv_obj_t *s_capture_btn = nullptr;
 static lv_obj_t *s_save_btn = nullptr;
 static lv_obj_t *s_status_label = nullptr;
 static lv_obj_t *s_footer_label = nullptr;
-static lv_timer_t *s_refresh_timer = nullptr;
 
 static SemaphoreHandle_t s_lock = nullptr;
 static TaskHandle_t s_capture_task = nullptr;
@@ -199,6 +200,15 @@ static const lv_img_dsc_t *active_photo_dsc()
     return camera_preview_uses_4bpp() ? &s_photo_dsc_4bpp : &s_photo_dsc_1bpp;
 }
 
+static void update_photo_img_layout()
+{
+    if (s_photo_stage == nullptr || s_photo_img == nullptr) {
+        return;
+    }
+
+    lv_obj_center(s_photo_img);
+}
+
 static void set_photo_img_source(bool force)
 {
     if (s_photo_img == nullptr) {
@@ -212,7 +222,19 @@ static void set_photo_img_source(bool force)
 
     s_photo_img_uses_4bpp = use_4bpp;
     lv_img_set_src(s_photo_img, active_photo_dsc());
+    update_photo_img_layout();
     lv_obj_invalidate(s_photo_img);
+}
+
+static void refresh_camera_ui_async_cb(void *user_data)
+{
+    (void)user_data;
+    refresh_camera_ui();
+}
+
+static void request_camera_ui_refresh()
+{
+    lv_async_call(refresh_camera_ui_async_cb, nullptr);
 }
 
 static bool render_photo_maps()
@@ -322,33 +344,40 @@ static void capture_task(void *arg)
     uint32_t captured_len = 0;
 
     set_camera_state(CameraState::Capturing, "Powering camera rails...", "");
+    request_camera_ui_refresh();
 
     if (!factory_camera_power_on()) {
         set_camera_state(CameraState::Error, "Camera power-up failed.", "");
+        request_camera_ui_refresh();
         goto done;
     }
     powered = true;
 
     if (!factory_camera_is_detected()) {
         set_camera_state(CameraState::Error, "No supported camera sensor responded on SCCB.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
     set_camera_state(CameraState::Capturing, "Starting MIPI CSI video device...", nullptr);
+    request_camera_ui_refresh();
     if (!factory_camera_init()) {
         set_camera_state(CameraState::Error, "Camera video initialization failed.", "");
+        request_camera_ui_refresh();
         goto done;
     }
     inited = true;
 
     if (!factory_camera_get_frame_info(&frame) || frame.bytes_per_frame == 0) {
         set_camera_state(CameraState::Error, "Camera returned an unsupported frame format.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
     raw_frame = static_cast<uint8_t *>(alloc_psram(frame.bytes_per_frame));
     if (raw_frame == nullptr) {
         set_camera_state(CameraState::Error, "Not enough memory for the raw camera frame.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
@@ -357,13 +386,16 @@ static void capture_task(void *arg)
                        frame.width,
                        frame.height,
                        factory_camera_pixel_format_name(frame.pixel_format));
+    request_camera_ui_refresh();
     if (!factory_camera_capture(raw_frame, frame.bytes_per_frame, &captured_len)) {
         set_camera_state(CameraState::Error, "Camera frame capture failed.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
     if (s_pending_gray == nullptr) {
         set_camera_state(CameraState::Error, "Camera buffers are not ready.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
@@ -371,6 +403,7 @@ static void capture_task(void *arg)
                        "Scaling to %" PRIu32 "x%" PRIu32 " grayscale...",
                        kPhotoWidth,
                        kPhotoHeight);
+    request_camera_ui_refresh();
     if (!factory_camera_process_frame_to_grayscale(
             raw_frame,
             frame.width,
@@ -380,6 +413,7 @@ static void capture_task(void *arg)
             kPhotoWidth,
             kPhotoHeight)) {
         set_camera_state(CameraState::Error, "Image processing failed.", "");
+        request_camera_ui_refresh();
         goto done;
     }
 
@@ -401,6 +435,7 @@ static void capture_task(void *arg)
     if (s_lock != nullptr) {
         xSemaphoreGive(s_lock);
     }
+    request_camera_ui_refresh();
 
 done:
     if (raw_frame != nullptr) {
@@ -419,6 +454,7 @@ done:
         s_capture_active = false;
         xSemaphoreGive(s_lock);
     }
+    request_camera_ui_refresh();
     vTaskDelete(nullptr);
 }
 
@@ -637,12 +673,6 @@ static void refresh_camera_ui()
     }
 }
 
-static void refresh_timer_cb(lv_timer_t *timer)
-{
-    (void)timer;
-    refresh_camera_ui();
-}
-
 static void create_camera(lv_obj_t *parent)
 {
     ensure_runtime();
@@ -662,20 +692,20 @@ static void create_camera(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_result_label, FACTORY_FONT_BODY, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_result_label, lv_color_black(), LV_PART_MAIN);
 
-    lv_obj_t *panel = factory_ui_create_content_panel(parent, 96, 88);
+    lv_obj_t *panel = factory_ui_create_content_panel(parent, 96, 92);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(panel, 14, LV_PART_MAIN);
 
     s_photo_stage = lv_obj_create(panel);
     lv_obj_set_width(s_photo_stage, lv_pct(100));
-    lv_obj_set_height(s_photo_stage, 440);
+    lv_obj_set_height(s_photo_stage, kPhotoStageHeight);
     style_flat_panel(s_photo_stage, 12, 2);
     lv_obj_set_style_pad_all(s_photo_stage, 0, LV_PART_MAIN);
 
     s_photo_img = lv_img_create(s_photo_stage);
     set_photo_img_source(true);
-    lv_obj_center(s_photo_img);
+    update_photo_img_layout();
 
     s_placeholder = lv_label_create(s_photo_stage);
     lv_label_set_text(s_placeholder, LV_SYMBOL_IMAGE "\nReady");
@@ -702,18 +732,9 @@ static void create_camera(lv_obj_t *parent)
 static void entry_camera(void)
 {
     refresh_camera_ui();
-    if (s_refresh_timer == nullptr) {
-        s_refresh_timer = lv_timer_create(refresh_timer_cb, kUiRefreshMs, nullptr);
-    }
 }
 
-static void exit_camera(void)
-{
-    if (s_refresh_timer != nullptr) {
-        lv_timer_del(s_refresh_timer);
-        s_refresh_timer = nullptr;
-    }
-}
+static void exit_camera(void) {}
 
 static void destroy_camera(void)
 {
