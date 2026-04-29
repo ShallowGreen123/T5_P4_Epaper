@@ -1,11 +1,17 @@
 #include "factory_port.h"
 
+#include "driver/gpio.h"
+#include "esp_log.h"
+
+#include "board_config.h"
 #include "factory_battery.h"
 #include "factory_display.h"
 #include "factory_touch.h"
 #include "factory_wifi.h"
 
 namespace {
+
+static constexpr const char *TAG = "factory_port";
 
 static const factory_page_info_t kPageInfo[] = {
     {FACTORY_PAGE_CLOCK, "Clock", "Reserved for RTC and wall-clock bring-up.", "This page keeps the FastEPD demo entry but does not enable RTC logic in this factory build.", "PLACEHOLDER"},
@@ -32,6 +38,50 @@ static factory_runtime_info_t s_runtime_info = {
     .boot_mode = "",
 };
 
+static constexpr gpio_num_t kBacklightGpios[] = {
+    (gpio_num_t)FACTORY_BACKLIGHT_IO11_GPIO,
+    (gpio_num_t)FACTORY_BACKLIGHT_IO12_GPIO,
+};
+
+static bool s_backlight_gpio_ready = false;
+static bool s_backlight_enabled[sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0])] = {};
+
+static bool ensure_backlight_gpio_ready()
+{
+    if (s_backlight_gpio_ready) {
+        return true;
+    }
+
+    gpio_config_t config = {};
+    config.intr_type = GPIO_INTR_DISABLE;
+    config.mode = GPIO_MODE_OUTPUT;
+    config.pin_bit_mask = (1ULL << FACTORY_BACKLIGHT_IO11_GPIO) | (1ULL << FACTORY_BACKLIGHT_IO12_GPIO);
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.pull_up_en = GPIO_PULLUP_DISABLE;
+
+    esp_err_t err = gpio_config(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "configure backlight gpios failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0]); ++i) {
+        gpio_set_level(kBacklightGpios[i], 0);
+        s_backlight_enabled[i] = false;
+    }
+
+    s_backlight_gpio_ready = true;
+    return true;
+}
+
+static int backlight_index_to_offset(uint8_t index)
+{
+    if (index < 1U || index > (uint8_t)(sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0]))) {
+        return -1;
+    }
+    return (int)index - 1;
+}
+
 static const char *runtime_touch_status()
 {
     return factory_touch_is_ready() ? "Touch ready" : "Touch unavailable";
@@ -55,6 +105,7 @@ extern "C" void factory_port_init(void)
 {
     factory_wifi_init();
     factory_battery_init();
+    (void)ensure_backlight_gpio_ready();
     refresh_runtime_info();
 }
 
@@ -72,4 +123,29 @@ extern "C" const factory_page_info_t *factory_port_get_page_info(factory_page_id
         }
     }
     return nullptr;
+}
+
+extern "C" bool factory_port_get_backlight_enabled(uint8_t index)
+{
+    const int offset = backlight_index_to_offset(index);
+    if (offset < 0 || !ensure_backlight_gpio_ready()) {
+        return false;
+    }
+    return s_backlight_enabled[offset];
+}
+
+extern "C" void factory_port_set_backlight_enabled(uint8_t index, bool enabled)
+{
+    const int offset = backlight_index_to_offset(index);
+    if (offset < 0 || !ensure_backlight_gpio_ready()) {
+        return;
+    }
+
+    const esp_err_t err = gpio_set_level(kBacklightGpios[offset], enabled ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "set backlight gpio %d failed: %s", (int)kBacklightGpios[offset], esp_err_to_name(err));
+        return;
+    }
+
+    s_backlight_enabled[offset] = enabled;
 }
