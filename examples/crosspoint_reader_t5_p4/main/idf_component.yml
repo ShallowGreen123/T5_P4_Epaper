@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf:
+    version: ">=5.4"
+  espressif/esp_lcd_touch_gt911: ^1.2.0~2
+  wngfra/esp_io_expander_pca9535: ^1.0.1
