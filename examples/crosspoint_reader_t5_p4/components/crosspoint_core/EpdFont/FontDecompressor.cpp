@@ -264,6 +264,10 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
     int32_t glyphIdx = findGlyphIndex(fontData, cp);
     if (glyphIdx < 0) continue;
+    const EpdGlyph& glyph = fontData->glyph[glyphIdx];
+    if (glyph.width == 0 || glyph.height == 0 || glyph.dataLength == 0) {
+      continue;
+    }
 
     // Deduplicate
     bool found = false;

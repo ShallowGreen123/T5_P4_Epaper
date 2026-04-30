@@ -50,9 +50,9 @@ constexpr char kCacheDir[] = "/sdcard/.crosspoint_reader";
 constexpr int kReaderFontId = -501438527;  // NOTOSERIF_18_FONT_ID
 constexpr int kUiFontId = -1589315735;     // NOTOSANS_14_FONT_ID
 constexpr int kReaderMargin = 36;
-constexpr int kStatusBarHeight = 42;
+constexpr int kStatusBarHeight = 70;
 constexpr int kTopBarHeight = 56;
-constexpr int kBottomBarHeight = 62;
+constexpr int kBottomBarHeight = 80;
 constexpr int kListRowHeight = 50;
 constexpr int kTocRowHeight = 46;
 constexpr int kFullRefreshEvery = 8;
@@ -303,14 +303,14 @@ void draw_status_bar(GfxRenderer& renderer, const std::string& title, const std:
     const int right_width = renderer.getTextWidth(kUiFontId, page_label.c_str());
     const int title_width = w - 2 * kReaderMargin - right_width - 18;
     const std::string clipped = renderer.truncatedText(kUiFontId, title.c_str(), std::max(20, title_width));
-    renderer.drawText(kUiFontId, kReaderMargin, y + 12, clipped.c_str());
-    renderer.drawText(kUiFontId, w - kReaderMargin - right_width, y + 12, page_label.c_str());
+    renderer.drawText(kUiFontId, kReaderMargin, y + 5, clipped.c_str());
+    renderer.drawText(kUiFontId, w - kReaderMargin - right_width, y + 5, page_label.c_str());
 
     progress = std::max(0.0f, std::min(1.0f, progress));
-    const int bar_y = renderer.getScreenHeight() - 5;
+    const int bar_y = renderer.getScreenHeight() - 20;
     const int bar_w = w - 2 * kReaderMargin;
-    renderer.drawRect(kReaderMargin, bar_y, bar_w, 3);
-    renderer.fillRect(kReaderMargin, bar_y, static_cast<int>(bar_w * progress), 3);
+    renderer.drawRect(kReaderMargin, bar_y, bar_w, 4);
+    renderer.fillRect(kReaderMargin, bar_y, static_cast<int>(bar_w * progress), 4);
 }
 
 void install_fonts(GfxRenderer& renderer, FontCacheManager& font_cache, FontDecompressor& decompressor)

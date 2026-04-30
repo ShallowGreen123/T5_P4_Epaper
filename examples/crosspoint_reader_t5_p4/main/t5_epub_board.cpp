@@ -429,6 +429,8 @@ bool T5P4Board::read_touch_point(int16_t *x, int16_t *y)
             break;
     }
 
+    // The GT911 orientation is 180 degrees opposite the rendered panel output
+    // on this board, so mirror in logical screen space after rotation.
     lx = (epaper_.width() - 1) - lx;
     ly = (epaper_.height() - 1) - ly;
 
