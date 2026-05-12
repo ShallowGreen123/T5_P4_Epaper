@@ -28,7 +28,7 @@ extern "C" {
 #define BSP_BOARD_T5_P4_E_PAPER
 
 #define BSP_CAPS_DISPLAY       1
-#define BSP_CAPS_TOUCH         0
+#define BSP_CAPS_TOUCH         1
 #define BSP_CAPS_AUDIO         1
 #define BSP_CAPS_AUDIO_SPEAKER 1
 #define BSP_CAPS_AUDIO_MIC     1

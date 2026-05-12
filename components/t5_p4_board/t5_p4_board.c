@@ -12,12 +12,15 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
+#include "esp_bit_defs.h"
 #include "esp_check.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_lcd_lt8912b.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_lcd_touch_gt911.h"
 #include "esp_ldo_regulator.h"
 #include "esp_log.h"
 
@@ -36,17 +39,50 @@
 #define CONFIG_BSP_LCD_LT8912B_TEST_PATTERN 0
 #endif
 
-#define PCA9535_INPUT_PORT_0_REG      0x00
-#define PCA9535_OUTPUT_PORT_0_REG     0x02
-#define PCA9535_CONFIG_PORT_0_REG     0x06
+#define XL9555_INPUT_PORT_0_REG             0x00
+#define XL9555_OUTPUT_PORT_0_REG            0x02
+#define XL9555_CONFIG_PORT_0_REG            0x06
 
-#define I2C_OP_TIMEOUT_MS             100
-#define HDMI_ENABLE_DELAY_MS          10
-#define HDMI_RESET_LOW_DELAY_MS       50
-#define HDMI_POWER_STABLE_DELAY_MS    120
-#define HDMI_READY_RETRY_COUNT        10
-#define HDMI_READY_RETRY_DELAY_MS     100
-#define AUDIO_AMP_STABLE_DELAY_MS     10
+#define PCA9535_INPUT_PORT_0_REG            0x00
+#define PCA9535_OUTPUT_PORT_0_REG           0x02
+#define PCA9535_CONFIG_PORT_0_REG           0x06
+
+#define SGM38121_REG_CHIP_REV               0x00
+#define SGM38121_REG_DISCH                  0x02
+#define SGM38121_REG_DVDD1_VOUT             0x03
+#define SGM38121_REG_DVDD2_VOUT             0x04
+#define SGM38121_REG_AVDD1_VOUT             0x05
+#define SGM38121_REG_AVDD2_VOUT             0x06
+#define SGM38121_REG_FUNCTION               0x07
+#define SGM38121_REG_SEQ_DVDD               0x0A
+#define SGM38121_REG_SEQ_AVDD               0x0B
+#define SGM38121_REG_ENABLE                 0x0E
+#define SGM38121_ENABLE_DVDD1_BIT           BIT0
+#define SGM38121_ENABLE_DVDD2_BIT           BIT1
+#define SGM38121_ENABLE_AVDD1_BIT           BIT2
+#define SGM38121_ENABLE_AVDD2_BIT           BIT3
+
+#define I2C_OP_TIMEOUT_MS                   100
+#define TOUCH_RESET_DELAY_MS                10
+#define TOUCH_ADDRESS_DELAY_MS              1
+#define TOUCH_STARTUP_DELAY_MS              50
+#define HDMI_ENABLE_DELAY_MS                10
+#define HDMI_RESET_LOW_DELAY_MS             50
+#define HDMI_POWER_STABLE_DELAY_MS          120
+#define HDMI_READY_RETRY_COUNT              10
+#define HDMI_READY_RETRY_DELAY_MS           100
+#define AUDIO_AMP_STABLE_DELAY_MS           10
+#define C6_RESET_LOW_DELAY_MS               20
+#define C6_BOOTSTRAP_DELAY_MS               10
+#define C6_READY_DELAY_MS                   200
+#define CAMERA_POWER_SETTLE_MS              20
+#define FRONTLIGHT_PWM_FREQ_HZ              5000
+#define FRONTLIGHT_PWM_MAX_DUTY             255
+
+#define FRONTLIGHT_LEDC_MODE                LEDC_LOW_SPEED_MODE
+#define FRONTLIGHT_LEDC_TIMER               LEDC_TIMER_0
+#define FRONTLIGHT_LEDC_CHANNEL_1           LEDC_CHANNEL_0
+#define FRONTLIGHT_LEDC_CHANNEL_2           LEDC_CHANNEL_1
 
 #if CONFIG_BSP_LCD_TYPE_HDMI && !CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
 #error "The current T5-P4 HDMI path requires CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y"
@@ -56,12 +92,16 @@ static const char *TAG = "t5_p4_board";
 
 static bool s_i2c_initialized;
 static bool s_pca9535_initialized;
+static bool s_xl9555_initialized;
 static bool s_sdspi_initialized;
 static bool s_hdmi_powered;
 static bool s_hdmi_int_gpio_configured;
+static bool s_frontlight_initialized;
 
 static i2c_master_bus_handle_t s_i2c_handle;
 static i2c_master_dev_handle_t s_pca9535_dev;
+static i2c_master_dev_handle_t s_xl9555_dev;
+static i2c_master_dev_handle_t s_sgm38121_dev;
 static sdmmc_card_t *s_sdcard;
 static i2s_chan_handle_t s_i2s_tx_chan;
 static i2s_chan_handle_t s_i2s_rx_chan;
@@ -70,6 +110,61 @@ static bsp_lcd_handles_t s_display_handles;
 static esp_ldo_channel_handle_t s_dsi_phy_ldo_chan;
 static uint8_t s_pca_output_state[2];
 static uint8_t s_pca_config_state[2] = {0xFF, 0xFF};
+static uint8_t s_xl_output_state[2];
+static uint8_t s_xl_config_state[2] = {0xFF, 0xFF};
+static uint8_t s_frontlight_led1_duty;
+static uint8_t s_frontlight_led2_duty;
+
+static esp_err_t i2c_write_registers(i2c_master_dev_handle_t dev, uint8_t start_reg, const uint8_t *data, size_t size)
+{
+    uint8_t buffer[3];
+
+    if (dev == NULL || data == NULL || size == 0 || size > 2) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    buffer[0] = start_reg;
+    memcpy(&buffer[1], data, size);
+    return i2c_master_transmit(dev, buffer, size + 1, I2C_OP_TIMEOUT_MS);
+}
+
+static esp_err_t i2c_read_registers(i2c_master_dev_handle_t dev, uint8_t start_reg, uint8_t *data, size_t size)
+{
+    if (dev == NULL || data == NULL || size == 0 || size > 2) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return i2c_master_transmit_receive(dev, &start_reg, 1, data, size, I2C_OP_TIMEOUT_MS);
+}
+
+static esp_err_t set_cached_level(uint8_t *output_state, uint8_t *config_state, uint8_t io_num, bool level)
+{
+    const uint8_t port = io_num / 8;
+    const uint8_t bit = 1U << (io_num % 8);
+
+    if (level) {
+        output_state[port] |= bit;
+    } else {
+        output_state[port] &= (uint8_t)~bit;
+    }
+    config_state[port] &= (uint8_t)~bit;
+    return ESP_OK;
+}
+
+static int get_cached_level(const uint8_t input_state[2], uint8_t io_num)
+{
+    const uint8_t port = io_num / 8;
+    const uint8_t bit = 1U << (io_num % 8);
+    return (input_state[port] & bit) ? 1 : 0;
+}
+
+static esp_err_t configure_cached_input(uint8_t *config_state, uint8_t io_num)
+{
+    const uint8_t port = io_num / 8;
+    const uint8_t bit = 1U << (io_num % 8);
+    config_state[port] |= bit;
+    return ESP_OK;
+}
 
 static void log_sdspi_pin_levels(const char *stage)
 {
@@ -106,31 +201,14 @@ static esp_err_t ensure_i2c_bus(void)
     return bsp_i2c_init();
 }
 
-static esp_err_t validate_pca9535_io(uint8_t io_num)
+static esp_err_t validate_xl9555_io(uint8_t io_num)
 {
     return (io_num < 16) ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
-static esp_err_t pca9535_write_registers(uint8_t start_reg, const uint8_t *data, size_t size)
+static esp_err_t validate_pca9535_io(uint8_t io_num)
 {
-    uint8_t buffer[3];
-
-    if (s_pca9535_dev == NULL || data == NULL || size == 0 || size > 2) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    buffer[0] = start_reg;
-    memcpy(&buffer[1], data, size);
-    return i2c_master_transmit(s_pca9535_dev, buffer, size + 1, I2C_OP_TIMEOUT_MS);
-}
-
-static esp_err_t pca9535_read_registers(uint8_t start_reg, uint8_t *data, size_t size)
-{
-    if (s_pca9535_dev == NULL || data == NULL || size == 0 || size > 2) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return i2c_master_transmit_receive(s_pca9535_dev, &start_reg, 1, data, size, I2C_OP_TIMEOUT_MS);
+    return (io_num >= T5_BOARD_PCA_IO_EPD_OE && io_num <= T5_BOARD_PCA_IO_TPS_INT) ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
 static void log_i2c_probe(const char *name, uint8_t address)
@@ -155,6 +233,9 @@ static void display_handles_reset(bsp_lcd_handles_t *handles)
 
     if (handles->panel) {
         esp_lcd_panel_del(handles->panel);
+    }
+    if (handles->control) {
+        esp_lcd_panel_del(handles->control);
     }
     if (handles->io) {
         esp_lcd_panel_io_del(handles->io);
@@ -190,42 +271,28 @@ static esp_err_t ensure_hdmi_int_gpio(void)
     return ESP_OK;
 }
 
-static int get_pca_input_level(const uint8_t inputs[2], uint8_t io_num)
-{
-    const uint8_t port = io_num / 8;
-    const uint8_t bit = 1U << (io_num % 8);
-    return (inputs[port] & bit) ? 1 : 0;
-}
-
 static void log_hdmi_power_debug_state(const char *stage)
 {
     uint8_t inputs[2] = {0};
     int hdmi_int_level = -1;
-    esp_err_t pca_ret = ESP_ERR_INVALID_STATE;
+    esp_err_t xl_ret = ESP_ERR_INVALID_STATE;
 
-    if (s_pca9535_initialized && (s_pca9535_dev != NULL)) {
-        pca_ret = pca9535_read_registers(PCA9535_INPUT_PORT_0_REG, inputs, sizeof(inputs));
-        if (pca_ret != ESP_OK) {
-            ESP_LOGW(TAG, "HDMI %s: read PCA9535 input state failed: %s", stage, esp_err_to_name(pca_ret));
-        }
+    if (s_xl9555_initialized && (s_xl9555_dev != NULL)) {
+        xl_ret = i2c_read_registers(s_xl9555_dev, XL9555_INPUT_PORT_0_REG, inputs, sizeof(inputs));
     }
 
-    esp_err_t gpio_ret = ensure_hdmi_int_gpio();
-    if (gpio_ret == ESP_OK) {
+    if (ensure_hdmi_int_gpio() == ESP_OK) {
         hdmi_int_level = gpio_get_level(T5_BOARD_HDMI_INT_GPIO);
-    } else {
-        ESP_LOGW(TAG, "HDMI %s: configure HDMI INT GPIO failed: %s", stage, esp_err_to_name(gpio_ret));
     }
 
     ESP_LOGI(TAG,
-             "HDMI %s: powered=%s out=0x%02X/0x%02X dir=0x%02X/0x%02X in=0x%02X/0x%02X io10_1v8=%d io7_en=%d io6_rst=%d int_gpio=%d",
+             "HDMI %s: powered=%s out=0x%02X/0x%02X dir=0x%02X/0x%02X in=0x%02X/0x%02X en=%d rst=%d int_gpio=%d",
              stage, s_hdmi_powered ? "yes" : "no",
-             s_pca_output_state[0], s_pca_output_state[1],
-             s_pca_config_state[0], s_pca_config_state[1],
+             s_xl_output_state[0], s_xl_output_state[1],
+             s_xl_config_state[0], s_xl_config_state[1],
              inputs[0], inputs[1],
-             (pca_ret == ESP_OK) ? get_pca_input_level(inputs, T5_BOARD_PCA_IO_HDMI_1V8_ENABLE) : -1,
-             (pca_ret == ESP_OK) ? get_pca_input_level(inputs, T5_BOARD_PCA_IO_HDMI_ENABLE) : -1,
-             (pca_ret == ESP_OK) ? get_pca_input_level(inputs, T5_BOARD_PCA_IO_HDMI_RESET) : -1,
+             (xl_ret == ESP_OK) ? get_cached_level(inputs, T5_BOARD_XL_IO_HDMI_ENABLE) : -1,
+             (xl_ret == ESP_OK) ? get_cached_level(inputs, T5_BOARD_XL_IO_HDMI_RESET) : -1,
              hdmi_int_level);
 }
 
@@ -256,6 +323,84 @@ static void bsp_disable_dsi_phy_power(void)
     }
 }
 
+static esp_err_t xl9555_write_cached_state(void)
+{
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_xl9555_dev, XL9555_OUTPUT_PORT_0_REG, s_xl_output_state, sizeof(s_xl_output_state)),
+                        TAG, "Write XL9555 output state failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_xl9555_dev, XL9555_CONFIG_PORT_0_REG, s_xl_config_state, sizeof(s_xl_config_state)),
+                        TAG, "Write XL9555 direction state failed");
+    return ESP_OK;
+}
+
+static esp_err_t pca9535_write_cached_state(void)
+{
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_pca9535_dev, PCA9535_OUTPUT_PORT_0_REG, s_pca_output_state, sizeof(s_pca_output_state)),
+                        TAG, "Write PCA9535 output state failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_pca9535_dev, PCA9535_CONFIG_PORT_0_REG, s_pca_config_state, sizeof(s_pca_config_state)),
+                        TAG, "Write PCA9535 direction state failed");
+    return ESP_OK;
+}
+
+static esp_err_t touch_int_gpio_mode(gpio_mode_t mode)
+{
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_DISABLE,
+        .pin_bit_mask = 1ULL << T5_BOARD_TOUCH_INT_GPIO,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .mode = mode,
+    };
+    return gpio_config(&io_conf);
+}
+
+static void touch_cleanup_handles(esp_lcd_touch_handle_t *touch, esp_lcd_panel_io_handle_t *touch_io)
+{
+    if (touch != NULL && *touch != NULL) {
+        esp_lcd_touch_del(*touch);
+        *touch = NULL;
+    }
+    if (touch_io != NULL && *touch_io != NULL) {
+        esp_lcd_panel_io_del(*touch_io);
+        *touch_io = NULL;
+    }
+}
+
+static uint8_t encode_vout_mv_rounded(int target_mv, int min_mv, int max_mv, int offset_mv, int min_reg, int max_reg, int *actual_mv)
+{
+    int clamped_mv = target_mv;
+
+    if (clamped_mv < min_mv) {
+        clamped_mv = min_mv;
+    }
+    if (clamped_mv > max_mv) {
+        clamped_mv = max_mv;
+    }
+
+    int reg_value = (clamped_mv - offset_mv + 4) / 8;
+    if (reg_value < min_reg) {
+        reg_value = min_reg;
+    }
+    if (reg_value > max_reg) {
+        reg_value = max_reg;
+    }
+
+    if (actual_mv != NULL) {
+        *actual_mv = offset_mv + (reg_value * 8);
+    }
+
+    return (uint8_t)reg_value;
+}
+
+static uint8_t encode_dvdd_mv_rounded(int target_mv, int *actual_mv)
+{
+    return encode_vout_mv_rounded(target_mv, 528, 1504, 504, 0x03, 0x7D, actual_mv);
+}
+
+static uint8_t encode_avdd_mv_rounded(int target_mv, int *actual_mv)
+{
+    return encode_vout_mv_rounded(target_mv, 1504, 3424, 1384, 0x0F, 0xFF, actual_mv);
+}
+
 esp_err_t bsp_i2c_init(void)
 {
     if (s_i2c_initialized) {
@@ -267,6 +412,8 @@ esp_err_t bsp_i2c_init(void)
         .sda_io_num = BSP_I2C_SDA,
         .scl_io_num = BSP_I2C_SCL,
         .i2c_port = BSP_I2C_NUM,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_bus_conf, &s_i2c_handle), TAG, "Create I2C master bus failed");
 
@@ -278,6 +425,15 @@ esp_err_t bsp_i2c_init(void)
 
 esp_err_t bsp_i2c_deinit(void)
 {
+    if (s_sgm38121_dev != NULL) {
+        BSP_ERROR_CHECK_RETURN_ERR(i2c_master_bus_rm_device(s_sgm38121_dev));
+        s_sgm38121_dev = NULL;
+    }
+    if (s_xl9555_dev != NULL) {
+        BSP_ERROR_CHECK_RETURN_ERR(i2c_master_bus_rm_device(s_xl9555_dev));
+        s_xl9555_dev = NULL;
+        s_xl9555_initialized = false;
+    }
     if (s_pca9535_dev != NULL) {
         BSP_ERROR_CHECK_RETURN_ERR(i2c_master_bus_rm_device(s_pca9535_dev));
         s_pca9535_dev = NULL;
@@ -296,6 +452,64 @@ esp_err_t bsp_i2c_deinit(void)
 i2c_master_bus_handle_t bsp_i2c_get_handle(void)
 {
     return s_i2c_handle;
+}
+
+esp_err_t t5_board_xl9555_init(void)
+{
+    if (s_xl9555_initialized) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C init failed");
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = T5_BOARD_I2C_ADDR_XL9555,
+        .scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_handle, &dev_cfg, &s_xl9555_dev), TAG,
+                        "Add XL9555 to I2C bus failed");
+
+    esp_err_t ret = i2c_master_probe(s_i2c_handle, T5_BOARD_I2C_ADDR_XL9555, I2C_OP_TIMEOUT_MS);
+    if (ret != ESP_OK) {
+        i2c_master_bus_rm_device(s_xl9555_dev);
+        s_xl9555_dev = NULL;
+        return ret;
+    }
+
+    s_xl_output_state[0] = BIT0 | BIT1 | BIT2 | BIT3 | BIT4;
+    s_xl_output_state[1] = BIT3;
+    s_xl_config_state[0] = BIT5;
+    s_xl_config_state[1] = BIT2 | BIT5 | BIT6 | BIT7;
+
+    ESP_RETURN_ON_ERROR(xl9555_write_cached_state(), TAG, "Initialize XL9555 state failed");
+    s_xl9555_initialized = true;
+    log_i2c_probe("XL9555", T5_BOARD_I2C_ADDR_XL9555);
+    return ESP_OK;
+}
+
+esp_err_t t5_board_xl9555_set_level(uint8_t io_num, bool level)
+{
+    ESP_RETURN_ON_ERROR(validate_xl9555_io(io_num), TAG, "Invalid XL9555 IO");
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(set_cached_level(s_xl_output_state, s_xl_config_state, io_num, level), TAG, "Update XL9555 cache failed");
+    return xl9555_write_cached_state();
+}
+
+esp_err_t t5_board_xl9555_get_level(uint8_t io_num, bool *level)
+{
+    uint8_t inputs[2] = {0};
+
+    if (level == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_RETURN_ON_ERROR(validate_xl9555_io(io_num), TAG, "Invalid XL9555 IO");
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(i2c_read_registers(s_xl9555_dev, XL9555_INPUT_PORT_0_REG, inputs, sizeof(inputs)),
+                        TAG, "Read XL9555 input state failed");
+    *level = get_cached_level(inputs, io_num) != 0;
+    return ESP_OK;
 }
 
 esp_err_t t5_board_pca9535_init(void)
@@ -325,13 +539,7 @@ esp_err_t t5_board_pca9535_init(void)
     s_pca_config_state[0] = 0xFF;
     s_pca_config_state[1] = 0xFF;
 
-    ESP_RETURN_ON_ERROR(pca9535_write_registers(PCA9535_OUTPUT_PORT_0_REG, s_pca_output_state,
-                                                sizeof(s_pca_output_state)),
-                        TAG, "Initialize PCA9535 outputs failed");
-    ESP_RETURN_ON_ERROR(pca9535_write_registers(PCA9535_CONFIG_PORT_0_REG, s_pca_config_state,
-                                                sizeof(s_pca_config_state)),
-                        TAG, "Initialize PCA9535 directions failed");
-
+    ESP_RETURN_ON_ERROR(pca9535_write_cached_state(), TAG, "Initialize PCA9535 state failed");
     s_pca9535_initialized = true;
     log_i2c_probe("PCA9535", T5_BOARD_I2C_ADDR_PCA9535);
     return ESP_OK;
@@ -339,36 +547,15 @@ esp_err_t t5_board_pca9535_init(void)
 
 esp_err_t t5_board_pca9535_set_level(uint8_t io_num, bool level)
 {
-    uint8_t port = 0;
-    uint8_t bit = 0;
-
     ESP_RETURN_ON_ERROR(validate_pca9535_io(io_num), TAG, "Invalid PCA9535 IO");
     ESP_RETURN_ON_ERROR(t5_board_pca9535_init(), TAG, "PCA9535 init failed");
-
-    port = io_num / 8;
-    bit = 1U << (io_num % 8);
-
-    if (level) {
-        s_pca_output_state[port] |= bit;
-    } else {
-        s_pca_output_state[port] &= (uint8_t)~bit;
-    }
-    s_pca_config_state[port] &= (uint8_t)~bit;
-
-    ESP_RETURN_ON_ERROR(pca9535_write_registers(PCA9535_OUTPUT_PORT_0_REG, s_pca_output_state,
-                                                sizeof(s_pca_output_state)),
-                        TAG, "Write PCA9535 output state failed");
-    ESP_RETURN_ON_ERROR(pca9535_write_registers(PCA9535_CONFIG_PORT_0_REG, s_pca_config_state,
-                                                sizeof(s_pca_config_state)),
-                        TAG, "Write PCA9535 direction state failed");
-    return ESP_OK;
+    ESP_RETURN_ON_ERROR(set_cached_level(s_pca_output_state, s_pca_config_state, io_num, level), TAG, "Update PCA9535 cache failed");
+    return pca9535_write_cached_state();
 }
 
 esp_err_t t5_board_pca9535_get_level(uint8_t io_num, bool *level)
 {
     uint8_t inputs[2] = {0};
-    uint8_t port = 0;
-    uint8_t bit = 0;
 
     if (level == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -376,18 +563,129 @@ esp_err_t t5_board_pca9535_get_level(uint8_t io_num, bool *level)
 
     ESP_RETURN_ON_ERROR(validate_pca9535_io(io_num), TAG, "Invalid PCA9535 IO");
     ESP_RETURN_ON_ERROR(t5_board_pca9535_init(), TAG, "PCA9535 init failed");
-    ESP_RETURN_ON_ERROR(pca9535_read_registers(PCA9535_INPUT_PORT_0_REG, inputs, sizeof(inputs)),
+    ESP_RETURN_ON_ERROR(i2c_read_registers(s_pca9535_dev, PCA9535_INPUT_PORT_0_REG, inputs, sizeof(inputs)),
                         TAG, "Read PCA9535 input state failed");
-
-    port = io_num / 8;
-    bit = 1U << (io_num % 8);
-    *level = (inputs[port] & bit) != 0;
+    *level = get_cached_level(inputs, io_num) != 0;
     return ESP_OK;
+}
+
+esp_err_t t5_board_gt911_reset(uint32_t address)
+{
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(touch_int_gpio_mode(GPIO_MODE_OUTPUT), TAG, "Configure touch INT output failed");
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_TOUCH_RESET, false), TAG, "Assert touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(TOUCH_RESET_DELAY_MS));
+
+    const int int_level = (address == ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP) ? 1 : 0;
+    ESP_RETURN_ON_ERROR(gpio_set_level(T5_BOARD_TOUCH_INT_GPIO, int_level), TAG, "Drive touch INT failed");
+    vTaskDelay(pdMS_TO_TICKS(TOUCH_ADDRESS_DELAY_MS));
+
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_TOUCH_RESET, true), TAG, "Release touch reset failed");
+    vTaskDelay(pdMS_TO_TICKS(TOUCH_STARTUP_DELAY_MS));
+
+    ESP_RETURN_ON_ERROR(touch_int_gpio_mode(GPIO_MODE_INPUT), TAG, "Restore touch INT input failed");
+    vTaskDelay(pdMS_TO_TICKS(TOUCH_STARTUP_DELAY_MS));
+    return ESP_OK;
+}
+
+esp_err_t t5_board_touch_new(uint16_t width,
+                             uint16_t height,
+                             esp_lcd_touch_handle_t *ret_touch,
+                             esp_lcd_panel_io_handle_t *ret_io,
+                             uint32_t *ret_address)
+{
+    esp_lcd_touch_handle_t touch = NULL;
+    esp_lcd_panel_io_handle_t touch_io = NULL;
+    const uint32_t addresses[] = {
+        ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS,
+        ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP,
+    };
+
+    ESP_RETURN_ON_FALSE(ret_touch != NULL && ret_io != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid touch arguments");
+    *ret_touch = NULL;
+    *ret_io = NULL;
+    if (ret_address != NULL) {
+        *ret_address = 0;
+    }
+
+    ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C init failed");
+
+    for (size_t i = 0; i < sizeof(addresses) / sizeof(addresses[0]); ++i) {
+        esp_lcd_panel_io_i2c_config_t io_config = {
+            .dev_addr = addresses[i],
+            .on_color_trans_done = NULL,
+            .user_ctx = NULL,
+            .control_phase_bytes = 1,
+            .dc_bit_offset = 0,
+            .lcd_cmd_bits = 16,
+            .lcd_param_bits = 0,
+            .flags = {
+                .dc_low_on_data = 0,
+                .disable_control_phase = 1,
+            },
+            .scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ,
+        };
+        esp_lcd_touch_config_t touch_config = {
+            .x_max = width,
+            .y_max = height,
+            .rst_gpio_num = GPIO_NUM_NC,
+            .int_gpio_num = T5_BOARD_TOUCH_INT_GPIO,
+            .levels = {
+                .reset = 0,
+                .interrupt = 0,
+            },
+            .flags = {
+                .swap_xy = 0,
+                .mirror_x = 0,
+                .mirror_y = 0,
+            },
+            .process_coordinates = NULL,
+            .interrupt_callback = NULL,
+            .user_data = NULL,
+            .driver_data = NULL,
+        };
+
+        touch_cleanup_handles(&touch, &touch_io);
+        if (t5_board_gt911_reset(addresses[i]) != ESP_OK) {
+            continue;
+        }
+
+        if (esp_lcd_new_panel_io_i2c(s_i2c_handle, &io_config, &touch_io) != ESP_OK) {
+            continue;
+        }
+        if (esp_lcd_touch_new_i2c_gt911(touch_io, &touch_config, &touch) == ESP_OK) {
+            *ret_touch = touch;
+            *ret_io = touch_io;
+            if (ret_address != NULL) {
+                *ret_address = addresses[i];
+            }
+            ESP_LOGI(TAG, "GT911 ready at 0x%02X", (unsigned int)addresses[i]);
+            return ESP_OK;
+        }
+    }
+
+    touch_cleanup_handles(&touch, &touch_io);
+    return ESP_ERR_NOT_FOUND;
+}
+
+void t5_board_touch_delete(esp_lcd_touch_handle_t touch, esp_lcd_panel_io_handle_t io)
+{
+    if (touch != NULL) {
+        esp_lcd_touch_del(touch);
+    }
+    if (io != NULL) {
+        esp_lcd_panel_io_del(io);
+    }
+}
+
+esp_err_t t5_board_audio_select_speaker(bool speaker_enabled)
+{
+    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SEL, speaker_enabled);
 }
 
 esp_err_t t5_board_audio_amp_enable(bool enable)
 {
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_AUDIO_SHUTDOWN, enable), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SHUTDOWN, enable), TAG,
                         "Set audio amp state failed");
     vTaskDelay(pdMS_TO_TICKS(AUDIO_AMP_STABLE_DELAY_MS));
     return ESP_OK;
@@ -399,21 +697,16 @@ esp_err_t t5_board_hdmi_power_on(void)
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_init(), TAG, "PCA9535 init failed");
-
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_1V8_ENABLE, true), TAG,
-                        "Enable HDMI 1.8V failed");
-    vTaskDelay(pdMS_TO_TICKS(HDMI_ENABLE_DELAY_MS));
-
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_ENABLE, true), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_ENABLE, true), TAG,
                         "Enable HDMI bridge failed");
     vTaskDelay(pdMS_TO_TICKS(HDMI_ENABLE_DELAY_MS));
 
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_RESET, false), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_RESET, false), TAG,
                         "Assert HDMI reset failed");
     vTaskDelay(pdMS_TO_TICKS(HDMI_RESET_LOW_DELAY_MS));
 
-    ESP_RETURN_ON_ERROR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_RESET, true), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_RESET, true), TAG,
                         "Release HDMI reset failed");
     vTaskDelay(pdMS_TO_TICKS(HDMI_POWER_STABLE_DELAY_MS));
 
@@ -428,16 +721,202 @@ esp_err_t t5_board_hdmi_power_on(void)
 
 esp_err_t t5_board_hdmi_power_off(void)
 {
-    if (!s_pca9535_initialized || !s_hdmi_powered) {
+    if (!s_xl9555_initialized || !s_hdmi_powered) {
         s_hdmi_powered = false;
         return ESP_OK;
     }
 
-    BSP_ERROR_CHECK_RETURN_ERR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_RESET, false));
-    BSP_ERROR_CHECK_RETURN_ERR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_ENABLE, false));
-    BSP_ERROR_CHECK_RETURN_ERR(t5_board_pca9535_set_level(T5_BOARD_PCA_IO_HDMI_1V8_ENABLE, false));
+    BSP_ERROR_CHECK_RETURN_ERR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_RESET, false));
+    BSP_ERROR_CHECK_RETURN_ERR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_ENABLE, false));
     s_hdmi_powered = false;
     log_hdmi_power_debug_state("after-power-off");
+    return ESP_OK;
+}
+
+esp_err_t t5_board_c6_set_reset(bool enable)
+{
+    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_C6_RESET, enable);
+}
+
+esp_err_t t5_board_c6_set_wakeup(bool enable)
+{
+    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_C6_WAKEUP, enable);
+}
+
+esp_err_t t5_board_c6_bootstrap(void)
+{
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(t5_board_c6_set_wakeup(false), TAG, "Drive C6 WAKEUP low failed");
+    ESP_RETURN_ON_ERROR(t5_board_c6_set_reset(false), TAG, "Assert C6 reset failed");
+    vTaskDelay(pdMS_TO_TICKS(C6_RESET_LOW_DELAY_MS));
+    ESP_RETURN_ON_ERROR(t5_board_c6_set_wakeup(true), TAG, "Drive C6 WAKEUP high failed");
+    vTaskDelay(pdMS_TO_TICKS(C6_BOOTSTRAP_DELAY_MS));
+    ESP_RETURN_ON_ERROR(t5_board_c6_set_reset(true), TAG, "Release C6 reset failed");
+    vTaskDelay(pdMS_TO_TICKS(C6_READY_DELAY_MS));
+    return ESP_OK;
+}
+
+gpio_num_t t5_board_c6_host_reset_gpio(void)
+{
+    return T5_BOARD_C6_HOST_RESET_GPIO;
+}
+
+esp_err_t t5_board_frontlight_init(void)
+{
+    if (s_frontlight_initialized) {
+        return ESP_OK;
+    }
+
+    const ledc_timer_config_t timer_config = {
+        .speed_mode = FRONTLIGHT_LEDC_MODE,
+        .timer_num = FRONTLIGHT_LEDC_TIMER,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .freq_hz = FRONTLIGHT_PWM_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    const ledc_channel_config_t led1_config = {
+        .gpio_num = T5_BOARD_FRONTLIGHT_LED1,
+        .speed_mode = FRONTLIGHT_LEDC_MODE,
+        .channel = FRONTLIGHT_LEDC_CHANNEL_1,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = FRONTLIGHT_LEDC_TIMER,
+        .duty = 0,
+        .hpoint = 0,
+    };
+    const ledc_channel_config_t led2_config = {
+        .gpio_num = T5_BOARD_FRONTLIGHT_LED2,
+        .speed_mode = FRONTLIGHT_LEDC_MODE,
+        .channel = FRONTLIGHT_LEDC_CHANNEL_2,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = FRONTLIGHT_LEDC_TIMER,
+        .duty = 0,
+        .hpoint = 0,
+    };
+
+    ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_config), TAG, "Configure frontlight LEDC timer failed");
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&led1_config), TAG, "Configure frontlight LED1 failed");
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&led2_config), TAG, "Configure frontlight LED2 failed");
+
+    s_frontlight_initialized = true;
+    s_frontlight_led1_duty = 0;
+    s_frontlight_led2_duty = 0;
+    return ESP_OK;
+}
+
+esp_err_t t5_board_frontlight_set(uint8_t led1_duty, uint8_t led2_duty)
+{
+    ESP_RETURN_ON_ERROR(t5_board_frontlight_init(), TAG, "Frontlight init failed");
+    ESP_RETURN_ON_ERROR(ledc_set_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_1, led1_duty), TAG,
+                        "Set frontlight LED1 duty failed");
+    ESP_RETURN_ON_ERROR(ledc_update_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_1), TAG,
+                        "Update frontlight LED1 duty failed");
+    ESP_RETURN_ON_ERROR(ledc_set_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2, led2_duty), TAG,
+                        "Set frontlight LED2 duty failed");
+    ESP_RETURN_ON_ERROR(ledc_update_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2), TAG,
+                        "Update frontlight LED2 duty failed");
+    s_frontlight_led1_duty = led1_duty;
+    s_frontlight_led2_duty = led2_duty;
+    return ESP_OK;
+}
+
+static esp_err_t ensure_sgm38121_device(void)
+{
+    if (s_sgm38121_dev != NULL) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C init failed");
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = T5_BOARD_I2C_ADDR_SGM38121,
+        .scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_probe(s_i2c_handle, T5_BOARD_I2C_ADDR_SGM38121, I2C_OP_TIMEOUT_MS),
+                        TAG, "SGM38121 probe failed");
+    return i2c_master_bus_add_device(s_i2c_handle, &dev_cfg, &s_sgm38121_dev);
+}
+
+esp_err_t t5_board_camera_power_on(const t5_board_camera_power_config_t *config)
+{
+    int dvdd1_actual_mv = 0;
+    int dvdd2_actual_mv = 0;
+    int avdd1_actual_mv = 0;
+    int avdd2_actual_mv = 0;
+    const t5_board_camera_power_config_t defaults = {
+        .dvdd1_mv = 0,
+        .dvdd2_mv = 0,
+        .avdd1_mv = 1800,
+        .avdd2_mv = 2800,
+    };
+    const t5_board_camera_power_config_t *cfg = (config != NULL) ? config : &defaults;
+    uint8_t enable_mask = SGM38121_ENABLE_AVDD1_BIT | SGM38121_ENABLE_AVDD2_BIT;
+    const uint8_t avdd1_reg = encode_avdd_mv_rounded(cfg->avdd1_mv, &avdd1_actual_mv);
+    const uint8_t avdd2_reg = encode_avdd_mv_rounded(cfg->avdd2_mv, &avdd2_actual_mv);
+    uint8_t dvdd1_reg = 0;
+    uint8_t dvdd2_reg = 0;
+    uint8_t chip_rev = 0;
+
+    if (cfg->dvdd1_mv > 0) {
+        dvdd1_reg = encode_dvdd_mv_rounded(cfg->dvdd1_mv, &dvdd1_actual_mv);
+        enable_mask |= SGM38121_ENABLE_DVDD1_BIT;
+    }
+    if (cfg->dvdd2_mv > 0) {
+        dvdd2_reg = encode_dvdd_mv_rounded(cfg->dvdd2_mv, &dvdd2_actual_mv);
+        enable_mask |= SGM38121_ENABLE_DVDD2_BIT;
+    }
+
+    ESP_RETURN_ON_ERROR(ensure_sgm38121_device(), TAG, "SGM38121 init failed");
+    (void)i2c_read_registers(s_sgm38121_dev, SGM38121_REG_CHIP_REV, &chip_rev, 1);
+    ESP_LOGI(TAG,
+             "Enable camera rails: chip_rev=0x%02X DVDD1=%d DVDD2=%d AVDD1=%d AVDD2=%d",
+             chip_rev, dvdd1_actual_mv, dvdd2_actual_mv, avdd1_actual_mv, avdd2_actual_mv);
+
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_SEQ_DVDD, (uint8_t[]){0x00}, 1),
+                        TAG, "Set SGM38121 DVDD sequence failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_SEQ_AVDD, (uint8_t[]){0x00}, 1),
+                        TAG, "Set SGM38121 AVDD sequence failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_FUNCTION, (uint8_t[]){0x00}, 1),
+                        TAG, "Disable SGM38121 wake-up failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_DISCH, (uint8_t[]){0x00}, 1),
+                        TAG, "Set SGM38121 discharge mode failed");
+    if (cfg->dvdd1_mv > 0) {
+        ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_DVDD1_VOUT, &dvdd1_reg, 1),
+                            TAG, "Write SGM38121 DVDD1 failed");
+    }
+    if (cfg->dvdd2_mv > 0) {
+        ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_DVDD2_VOUT, &dvdd2_reg, 1),
+                            TAG, "Write SGM38121 DVDD2 failed");
+    }
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_AVDD1_VOUT, &avdd1_reg, 1),
+                        TAG, "Write SGM38121 AVDD1 failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_AVDD2_VOUT, &avdd2_reg, 1),
+                        TAG, "Write SGM38121 AVDD2 failed");
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_ENABLE, &enable_mask, 1),
+                        TAG, "Enable camera rails failed");
+    vTaskDelay(pdMS_TO_TICKS(CAMERA_POWER_SETTLE_MS));
+    return ESP_OK;
+}
+
+esp_err_t t5_board_camera_power_off(void)
+{
+    const uint8_t disabled = 0x00;
+
+    if (s_sgm38121_dev == NULL) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(i2c_write_registers(s_sgm38121_dev, SGM38121_REG_ENABLE, &disabled, 1),
+                        TAG, "Disable camera rails failed");
+    return ESP_OK;
+}
+
+esp_err_t t5_board_init(void)
+{
+    ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "I2C init failed");
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
+    ESP_RETURN_ON_ERROR(t5_board_pca9535_init(), TAG, "PCA9535 init failed");
+    ESP_RETURN_ON_ERROR(t5_board_frontlight_init(), TAG, "Frontlight init failed");
     return ESP_OK;
 }
 
@@ -521,8 +1000,7 @@ esp_err_t bsp_sdcard_sdspi_mount(bsp_sdcard_cfg_t *cfg)
         cfg->slot.sdspi = &sdslot;
     }
 
-    esp_err_t ret = esp_vfs_fat_sdspi_mount(BSP_SD_MOUNT_POINT, cfg->host, cfg->slot.sdspi,
-                                            cfg->mount, &s_sdcard);
+    esp_err_t ret = esp_vfs_fat_sdspi_mount(BSP_SD_MOUNT_POINT, cfg->host, cfg->slot.sdspi, cfg->mount, &s_sdcard);
     if (ret != ESP_OK && initialized_here) {
         spi_bus_free(BSP_SDSPI_HOST);
         s_sdspi_initialized = false;
@@ -613,7 +1091,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         }
     }
 
-    if (t5_board_audio_amp_enable(true) != ESP_OK) {
+    if (t5_board_audio_select_speaker(true) != ESP_OK || t5_board_audio_amp_enable(true) != ESP_OK) {
         return NULL;
     }
 
@@ -731,7 +1209,7 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 
 esp_err_t bsp_display_brightness_init(void)
 {
-    return ESP_OK;
+    return t5_board_frontlight_init();
 }
 
 esp_err_t bsp_display_brightness_deinit(void)
@@ -741,18 +1219,25 @@ esp_err_t bsp_display_brightness_deinit(void)
 
 esp_err_t bsp_display_brightness_set(int brightness_percent)
 {
-    (void)brightness_percent;
-    return ESP_OK;
+    if (brightness_percent < 0) {
+        brightness_percent = 0;
+    }
+    if (brightness_percent > 100) {
+        brightness_percent = 100;
+    }
+    const uint8_t duty = (uint8_t)((brightness_percent * FRONTLIGHT_PWM_MAX_DUTY) / 100);
+    return t5_board_frontlight_set(duty, duty);
 }
 
 esp_err_t bsp_display_backlight_on(void)
 {
-    return ESP_OK;
+    return t5_board_frontlight_set(s_frontlight_led1_duty == 0 ? FRONTLIGHT_PWM_MAX_DUTY : s_frontlight_led1_duty,
+                                   s_frontlight_led2_duty == 0 ? FRONTLIGHT_PWM_MAX_DUTY : s_frontlight_led2_duty);
 }
 
 esp_err_t bsp_display_backlight_off(void)
 {
-    return ESP_OK;
+    return t5_board_frontlight_set(0, 0);
 }
 
 esp_err_t bsp_display_new(const bsp_display_config_t *config,

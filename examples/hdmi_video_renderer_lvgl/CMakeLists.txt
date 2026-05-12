@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
+list(APPEND EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/../../components"
+)
 
 # Keep the legacy media-player components in the tree, but do not build them for
 # this dedicated HDMI + LVGL demo runner.

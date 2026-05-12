@@ -9,6 +9,7 @@ idf_component_register(
         driver
         esp_driver_i2s
         spiffs
+        t5_p4_board
 )
 
 spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)

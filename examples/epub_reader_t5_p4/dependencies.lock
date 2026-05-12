@@ -128,6 +128,6 @@ direct_dependencies:
 - idf
 - sheldonix/esp_io_expander_xl9555
 - wngfra/esp_io_expander_pca9535
-manifest_hash: 860ee0d5396a5a3e3dee56844c08d983fae4e15bf90de39e1de744201763f3b2
+manifest_hash: 690bb6f7f4de61a41412d6a56e03760359e4db51318fd78dcd7ce32a695d71e4
 target: esp32p4
 version: 2.0.0

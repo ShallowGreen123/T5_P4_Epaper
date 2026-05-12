@@ -3,30 +3,20 @@
 #include <algorithm>
 
 #include "driver/gpio.h"
-#include "driver/i2c.h"
-#include "esp_err.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
+
+#include "bsp/esp-bsp.h"
 
 namespace {
 
 constexpr char kTag[] = "t5_epub_board";
-
-constexpr gpio_num_t kI2cSdaPin = GPIO_NUM_7;
-constexpr gpio_num_t kI2cSclPin = GPIO_NUM_8;
-constexpr gpio_num_t kTouchIrqPin = GPIO_NUM_5;
+constexpr uint8_t kPinModeOutput = 1;
 
 constexpr gpio_num_t kSdMisoPin = GPIO_NUM_44;
 constexpr gpio_num_t kSdClkPin = GPIO_NUM_45;
 constexpr gpio_num_t kSdMosiPin = GPIO_NUM_46;
 constexpr gpio_num_t kSdCsPin = GPIO_NUM_47;
-
-constexpr uint32_t kExtIoPinBase = 0x1000;
-constexpr uint32_t extio_pin(uint32_t pin) { return kExtIoPinBase + pin; }
-
-constexpr uint8_t kBoardPca00TouchReset = 0;
-constexpr uint8_t kBoardPca14VcomCtrl = 12;
-constexpr uint8_t kBoardPca15TpsWakeup = 13;
 
 void configure_native_gpio(uint32_t pin, uint8_t mode)
 {
@@ -35,7 +25,7 @@ void configure_native_gpio(uint32_t pin, uint8_t mode)
     io_conf.pin_bit_mask = (1ULL << pin);
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    io_conf.mode = (mode == OUTPUT) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
+    io_conf.mode = (mode == kPinModeOutput) ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 }
 
@@ -46,47 +36,45 @@ T5P4Board *T5P4Board::s_active_board_ = nullptr;
 bool T5P4Board::init()
 {
     s_active_board_ = this;
-    return init_io_expander() && init_touch() && init_display();
+    return init_i2c_bus() && init_touch() && init_display();
 }
 
-bool T5P4Board::init_io_expander()
+bool T5P4Board::init_i2c_bus()
 {
-    if (!io_.begin((i2c_port_t)I2C_NUM_0, XL9555_SLAVE_ADDRESS0, kI2cSdaPin, kI2cSclPin)) {
-        ESP_LOGE(kTag, "Failed to initialize XL9555");
+    if (i2c_bus_ != nullptr) {
+        return true;
+    }
+
+    if (bsp_i2c_init() != ESP_OK) {
+        ESP_LOGE(kTag, "Failed to initialize shared I2C bus");
         return false;
     }
 
-    for (int pin = 0; pin < 16; ++pin) {
-        io_.pinMode(pin, OUTPUT);
-        io_.digitalWrite(pin, HIGH);
+    i2c_bus_ = bsp_i2c_get_handle();
+    if (i2c_bus_ == nullptr) {
+        ESP_LOGE(kTag, "Shared I2C handle unavailable");
+        return false;
     }
 
-    io_.pinMode(kBoardPca14VcomCtrl, INPUT);
-    io_.pinMode(kBoardPca15TpsWakeup, INPUT);
-    ESP_LOGI(kTag, "XL9555 initialized");
+    bbepSetI2CMasterBus(i2c_bus_);
+    ESP_LOGI(kTag, "Shared I2C bus ready");
     return true;
 }
 
 bool T5P4Board::init_touch()
 {
-    touch_.setPins((int)extio_pin(kBoardPca00TouchReset), (int)kTouchIrqPin);
-    touch_.setGpioCallback(gpio_mode_thunk, gpio_write_thunk, gpio_read_thunk);
-
-    // XL9555 and GT911 share I2C0. SensorLib's ESP-IDF path reinstalls the driver
-    // during begin(), so delete the expander-installed instance first to avoid the
-    // noisy "i2c driver install error" path while still reusing the same bus/pins.
-    esp_err_t ret = i2c_driver_delete(I2C_NUM_0);
-    if (ret != ESP_OK) {
-        ESP_LOGW(kTag, "Failed to reset I2C driver before GT911 init: %s", esp_err_to_name(ret));
+    if (touch_ != nullptr) {
+        return true;
     }
 
-    if (!touch_.begin((i2c_port_t)I2C_NUM_0, GT911_SLAVE_ADDRESS_L, kI2cSdaPin, kI2cSclPin)) {
-        ESP_LOGE(kTag, "Failed to initialize GT911");
+    esp_err_t err = t5_board_touch_new(kPanelWidth, kPanelHeight, &touch_, &touch_io_, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "Failed to initialize GT911: %s", esp_err_to_name(err));
+        touch_ = nullptr;
+        touch_io_ = nullptr;
         return false;
     }
 
-    touch_.setInterruptMode(LOW_LEVEL_QUERY);
-    ESP_LOGI(kTag, "GT911 initialized");
     return true;
 }
 
@@ -98,9 +86,6 @@ bool T5P4Board::init_display()
         return false;
     }
 
-    // BB_PANEL_LILYGO_T5P4 already has a built-in panel definition, and initPanel()
-    // allocates the frame buffers with the correct size. Calling setPanelSize() again
-    // returns BBEP_ERROR_BAD_PARAMETER because the panel is already configured.
     if (epaper_.width() != kPanelWidth || epaper_.height() != kPanelHeight) {
         ESP_LOGW(kTag, "Unexpected panel dimensions after init: %dx%d", epaper_.width(), epaper_.height());
     } else {
@@ -185,15 +170,20 @@ void T5P4Board::unmount_sd_card(const char *mount_point)
 
 bool T5P4Board::read_touch_point(int16_t *x, int16_t *y)
 {
-    int16_t raw_x[1] = {0};
-    int16_t raw_y[1] = {0};
-    const uint8_t touched = touch_.getPoint(raw_x, raw_y, 1);
-    if (touched == 0) {
+    if (touch_ == nullptr) {
         return false;
     }
 
-    const int32_t phys_x = (kPanelWidth - 1) - (int32_t)raw_y[0];
-    const int32_t phys_y = (int32_t)raw_x[0];
+    esp_lcd_touch_read_data(touch_);
+
+    esp_lcd_touch_point_data_t points[1] = {};
+    uint8_t touched = 0;
+    if (esp_lcd_touch_get_data(touch_, points, &touched, 1) != ESP_OK || touched == 0) {
+        return false;
+    }
+
+    const int32_t phys_x = (kPanelWidth - 1) - (int32_t)points[0].y;
+    const int32_t phys_y = (int32_t)points[0].x;
 
     int32_t lx = phys_x;
     int32_t ly = phys_y;
@@ -215,9 +205,6 @@ bool T5P4Board::read_touch_point(int16_t *x, int16_t *y)
             break;
     }
 
-    // The GT911 coordinates end up 180 degrees opposite to the rendered FastEPD
-    // output on this board. Keep the display rotation unchanged and rotate the
-    // touch coordinates in logical screen space so touches match the current UI.
     lx = (epaper_.width() - 1) - lx;
     ly = (epaper_.height() - 1) - ly;
 
@@ -230,75 +217,19 @@ bool T5P4Board::read_touch_point(int16_t *x, int16_t *y)
 
 void T5P4Board::platform_pin_mode(uint32_t pin, uint8_t mode)
 {
-    if (s_active_board_ != nullptr) {
-        s_active_board_->gpio_mode_impl(pin, mode);
-        return;
-    }
+    (void)s_active_board_;
     configure_native_gpio(pin, mode);
 }
 
 void T5P4Board::platform_digital_write(uint32_t pin, uint8_t value)
 {
-    if (s_active_board_ != nullptr) {
-        s_active_board_->gpio_write_impl(pin, value);
-        return;
-    }
+    (void)s_active_board_;
     gpio_set_level((gpio_num_t)pin, value);
 }
 
 int T5P4Board::platform_digital_read(uint32_t pin)
 {
-    if (s_active_board_ != nullptr) {
-        return s_active_board_->gpio_read_impl(pin);
-    }
-    return gpio_get_level((gpio_num_t)pin);
-}
-
-void T5P4Board::gpio_mode_thunk(uint32_t pin, uint8_t mode)
-{
-    if (s_active_board_ != nullptr) {
-        s_active_board_->gpio_mode_impl(pin, mode);
-    }
-}
-
-void T5P4Board::gpio_write_thunk(uint32_t pin, uint8_t value)
-{
-    if (s_active_board_ != nullptr) {
-        s_active_board_->gpio_write_impl(pin, value);
-    }
-}
-
-int T5P4Board::gpio_read_thunk(uint32_t pin)
-{
-    if (s_active_board_ != nullptr) {
-        return s_active_board_->gpio_read_impl(pin);
-    }
-    return 0;
-}
-
-void T5P4Board::gpio_mode_impl(uint32_t pin, uint8_t mode)
-{
-    if (pin >= kExtIoPinBase && pin < (kExtIoPinBase + 16)) {
-        io_.pinMode((uint8_t)(pin - kExtIoPinBase), mode);
-        return;
-    }
-    configure_native_gpio(pin, mode);
-}
-
-void T5P4Board::gpio_write_impl(uint32_t pin, uint8_t value)
-{
-    if (pin >= kExtIoPinBase && pin < (kExtIoPinBase + 16)) {
-        io_.digitalWrite((uint8_t)(pin - kExtIoPinBase), value);
-        return;
-    }
-    gpio_set_level((gpio_num_t)pin, value);
-}
-
-int T5P4Board::gpio_read_impl(uint32_t pin)
-{
-    if (pin >= kExtIoPinBase && pin < (kExtIoPinBase + 16)) {
-        return io_.digitalRead((uint8_t)(pin - kExtIoPinBase));
-    }
+    (void)s_active_board_;
     return gpio_get_level((gpio_num_t)pin);
 }
 

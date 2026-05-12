@@ -1,0 +1,24 @@
+dependencies:
+  esp_codec_dev:
+    public: true
+    version: ~1.5
+  chmorgan/esp-audio-player:
+    public: true
+    version: "1.0.*"
+  chmorgan/esp-file-iterator:
+    public: true
+    version: "1.0.0"
+  espressif/esp_lcd_touch_gt911:
+    public: true
+    version: "^1.2.0~2"
+  espressif/esp_lcd_lt8912b:
+    version: ">=0.1.3,<1.0.0"
+  sheldonix/esp_io_expander_xl9555:
+    version: "^0.8.0"
+  wngfra/esp_io_expander_pca9535:
+    version: "^1.0.1"
+  idf: ">=5.4"
+description: Shared T5-P4 V0.2 board layer with BSP-compatible HDMI/SD/audio/touch helpers
+targets:
+  - esp32p4
+version: 0.1.0

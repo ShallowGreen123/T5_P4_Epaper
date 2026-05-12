@@ -14,6 +14,7 @@ idf_component_register(
         fatfs
         sdmmc
         fastepd
+        t5_p4_board
         crosspoint_core
 )
 

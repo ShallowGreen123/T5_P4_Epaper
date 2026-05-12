@@ -14,7 +14,7 @@ idf_component_register(
         fatfs
         sdmmc
         fastepd
-        sensorlib
+        t5_p4_board
         epub_core
 )
 

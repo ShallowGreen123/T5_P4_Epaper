@@ -4,10 +4,11 @@
 #include <stdint.h>
 
 #include <FastEPD.h>
-#include "ExtensionIOXL9555.hpp"
-#include "TouchDrvGT911.hpp"
+#include "driver/i2c_master.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_master.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_touch.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
@@ -32,23 +33,16 @@ public:
     int screen_height() { return epaper_.height(); }
 
 private:
-    bool init_io_expander();
+    bool init_i2c_bus();
     bool init_touch();
     bool init_display();
-
-    static void gpio_mode_thunk(uint32_t pin, uint8_t mode);
-    static void gpio_write_thunk(uint32_t pin, uint8_t value);
-    static int gpio_read_thunk(uint32_t pin);
-
-    void gpio_mode_impl(uint32_t pin, uint8_t mode);
-    void gpio_write_impl(uint32_t pin, uint8_t value);
-    int gpio_read_impl(uint32_t pin);
 
     static T5P4Board *s_active_board_;
 
     FASTEPD epaper_;
-    TouchDrvGT911 touch_;
-    ExtensionIOXL9555 io_;
+    i2c_master_bus_handle_t i2c_bus_ = nullptr;
+    esp_lcd_panel_io_handle_t touch_io_ = nullptr;
+    esp_lcd_touch_handle_t touch_ = nullptr;
     sdmmc_card_t *card_ = nullptr;
     bool spi_bus_ready_ = false;
 };

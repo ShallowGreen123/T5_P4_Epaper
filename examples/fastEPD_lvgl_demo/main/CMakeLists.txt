@@ -14,6 +14,7 @@ idf_component_register(
         esp_timer
         fastepd
         lvgl
+        t5_p4_board
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
