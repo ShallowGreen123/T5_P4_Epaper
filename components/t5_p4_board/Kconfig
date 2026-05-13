@@ -54,6 +54,15 @@ menu "Board Support Package (T5-P4 E-Paper)"
                 visible on the monitor, the HDMI output side is working and the
                 issue is likely in the MIPI input or frame submission path.
 
+        config BSP_LCD_LT8912B_MIPI_AUTO_DETECT
+            bool "Auto-detect LT8912B MIPI lane/polarity mapping"
+            default y
+            help
+                Try LT8912B MIPI P/N and lane-swap combinations after the DPI
+                panel starts, then keep the first mapping that reports valid
+                MIPI H/V sync. This avoids hard-coding the ESP32-P4 EV board
+                routing when the T5-P4 HDMI wiring differs.
+
         config BSP_LCD_LT8912B_MIPI_PN_SWAP
             bool "Enable LT8912B MIPI P/N swap"
             default n

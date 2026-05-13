@@ -100,6 +100,7 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config,
                           esp_lcd_panel_io_handle_t *ret_io);
 esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config,
                                        bsp_lcd_handles_t *ret_handles);
+esp_err_t bsp_display_hdmi_recover_mipi(void);
 void bsp_display_delete(void);
 esp_err_t bsp_display_brightness_init(void);
 esp_err_t bsp_display_brightness_deinit(void);

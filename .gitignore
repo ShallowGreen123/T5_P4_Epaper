@@ -10,3 +10,4 @@ platformIO_P4/examples/reference/
 PlatformIO_P4_examples/
 debug.md
 ui_design.md
+dependencies.lock

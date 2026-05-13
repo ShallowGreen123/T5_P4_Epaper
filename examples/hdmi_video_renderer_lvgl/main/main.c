@@ -149,6 +149,11 @@ static esp_err_t submit_boot_diagnostic_frame(void)
         ESP_LOGW(TAG, "Boot diagnostic frame flush timeout");
     }
 
+    ret = bsp_display_hdmi_recover_mipi();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "HDMI MIPI recovery after boot frame failed: %s", esp_err_to_name(ret));
+    }
+
     const bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(s_lcd_panel);
     ESP_LOGI(TAG, "Submitted boot diagnostic frame, LT8912 ready=%s", hdmi_ready ? "yes" : "no");
     vTaskDelay(pdMS_TO_TICKS(DISPLAY_BOOT_TEST_FRAME_DELAY_MS));

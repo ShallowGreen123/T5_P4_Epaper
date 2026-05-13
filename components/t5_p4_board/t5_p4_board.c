@@ -39,6 +39,10 @@
 #define CONFIG_BSP_LCD_LT8912B_TEST_PATTERN 0
 #endif
 
+#ifndef CONFIG_BSP_LCD_LT8912B_MIPI_AUTO_DETECT
+#define CONFIG_BSP_LCD_LT8912B_MIPI_AUTO_DETECT 1
+#endif
+
 #define XL9555_INPUT_PORT_0_REG             0x00
 #define XL9555_OUTPUT_PORT_0_REG            0x02
 #define XL9555_CONFIG_PORT_0_REG            0x06
@@ -71,6 +75,7 @@
 #define HDMI_POWER_STABLE_DELAY_MS          120
 #define HDMI_READY_RETRY_COUNT              10
 #define HDMI_READY_RETRY_DELAY_MS           100
+#define HDMI_MIPI_RELOCK_DELAY_MS           50
 #define AUDIO_AMP_STABLE_DELAY_MS           10
 #define C6_RESET_LOW_DELAY_MS               20
 #define C6_BOOTSTRAP_DELAY_MS               10
@@ -114,6 +119,9 @@ static uint8_t s_xl_output_state[2];
 static uint8_t s_xl_config_state[2] = {0xFF, 0xFF};
 static uint8_t s_frontlight_led1_duty;
 static uint8_t s_frontlight_led2_duty;
+static bool s_lt8912b_mapping_valid;
+static bool s_lt8912b_pn_swap;
+static bool s_lt8912b_lane_swap;
 
 static esp_err_t i2c_write_registers(i2c_master_dev_handle_t dev, uint8_t start_reg, const uint8_t *data, size_t size)
 {
@@ -732,6 +740,193 @@ esp_err_t t5_board_hdmi_power_off(void)
     log_hdmi_power_debug_state("after-power-off");
     return ESP_OK;
 }
+
+#if CONFIG_BSP_LCD_TYPE_HDMI
+typedef struct {
+    uint16_t hsync;
+    uint16_t vsync;
+} lt8912b_mipi_sync_t;
+
+static esp_err_t lt8912b_write_reg(esp_lcd_panel_io_handle_t io, uint8_t reg, uint8_t value)
+{
+    return esp_lcd_panel_io_tx_param(io, reg, &value, 1);
+}
+
+static esp_err_t lt8912b_mipi_rx_logic_reset(esp_lcd_panel_io_handle_t io_main)
+{
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x03, 0x7f), TAG, "Reset LT8912B MIPI RX failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x03, 0xff), TAG, "Release LT8912B MIPI RX failed");
+
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x05, 0xfb), TAG, "Reset LT8912B DDS failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x05, 0xff), TAG, "Release LT8912B DDS failed");
+    vTaskDelay(pdMS_TO_TICKS(HDMI_MIPI_RELOCK_DELAY_MS));
+    return ESP_OK;
+}
+
+static esp_err_t lt8912b_apply_mipi_mapping(esp_lcd_panel_io_handle_t io_main,
+                                            esp_lcd_panel_io_handle_t io_cec,
+                                            bool pn_swap,
+                                            bool lane_swap)
+{
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x3e, pn_swap ? 0xf6 : 0xd6), TAG,
+                        "Set LT8912B MIPI P/N swap failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x3f, 0xd4), TAG, "Set LT8912B MIPI EQ failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_main, 0x41, 0x3c), TAG, "Set LT8912B MIPI EQ failed");
+
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x10, 0x01), TAG, "Enable LT8912B MIPI termination failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x11, 0x10), TAG, "Set LT8912B MIPI settle failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x13, BSP_LCD_MIPI_DSI_LANE_NUM), TAG,
+                        "Set LT8912B MIPI lane count failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x14, 0x00), TAG, "Set LT8912B MIPI debug mux failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x15, lane_swap ? 0xa8 : 0x00), TAG,
+                        "Set LT8912B MIPI lane swap failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x1a, 0x03), TAG, "Set LT8912B MIPI hshift failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x1b, 0x03), TAG, "Set LT8912B MIPI vshift failed");
+
+    ESP_RETURN_ON_ERROR(lt8912b_mipi_rx_logic_reset(io_main), TAG, "Relock LT8912B MIPI RX failed");
+    return ESP_OK;
+}
+
+static esp_err_t lt8912b_read_mipi_sync(esp_lcd_panel_io_handle_t io_main, lt8912b_mipi_sync_t *sync)
+{
+    uint8_t hsync_l = 0;
+    uint8_t hsync_h = 0;
+    uint8_t vsync_l = 0;
+    uint8_t vsync_h = 0;
+
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(io_main, 0x9c, &hsync_l, 1), TAG,
+                        "Read LT8912B H sync low failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(io_main, 0x9d, &hsync_h, 1), TAG,
+                        "Read LT8912B H sync high failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(io_main, 0x9e, &vsync_l, 1), TAG,
+                        "Read LT8912B V sync low failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_rx_param(io_main, 0x9f, &vsync_h, 1), TAG,
+                        "Read LT8912B V sync high failed");
+
+    sync->hsync = ((uint16_t)hsync_h << 8) | hsync_l;
+    sync->vsync = ((uint16_t)vsync_h << 8) | vsync_l;
+    return ESP_OK;
+}
+
+static esp_err_t lt8912b_configure_mipi_mapping(esp_lcd_panel_io_handle_t io_main,
+                                                esp_lcd_panel_io_handle_t io_cec)
+{
+    const bool preferred_pn_swap = s_lt8912b_mapping_valid ?
+                                   s_lt8912b_pn_swap : CONFIG_BSP_LCD_LT8912B_MIPI_PN_SWAP;
+    const bool preferred_lane_swap = s_lt8912b_mapping_valid ?
+                                     s_lt8912b_lane_swap : CONFIG_BSP_LCD_LT8912B_MIPI_LANE_SWAP;
+
+#if CONFIG_BSP_LCD_LT8912B_MIPI_AUTO_DETECT
+    const struct {
+        bool pn_swap;
+        bool lane_swap;
+    } candidates[] = {
+        {preferred_pn_swap, preferred_lane_swap},
+        {false, false},
+        {true, false},
+        {false, true},
+        {true, true},
+    };
+
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        bool duplicate = false;
+        for (size_t previous = 0; previous < i; ++previous) {
+            if (candidates[previous].pn_swap == candidates[i].pn_swap &&
+                candidates[previous].lane_swap == candidates[i].lane_swap) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+
+        ESP_RETURN_ON_ERROR(lt8912b_apply_mipi_mapping(io_main, io_cec,
+                                                       candidates[i].pn_swap,
+                                                       candidates[i].lane_swap),
+                            TAG, "Apply LT8912B MIPI mapping failed");
+
+        lt8912b_mipi_sync_t sync = {0};
+        ESP_RETURN_ON_ERROR(lt8912b_read_mipi_sync(io_main, &sync), TAG, "Read LT8912B MIPI sync failed");
+        ESP_LOGI(TAG, "LT8912B MIPI candidate pn_swap=%d lane_swap=%d -> H sync=%u V sync=%u",
+                 candidates[i].pn_swap, candidates[i].lane_swap, sync.hsync, sync.vsync);
+
+        if (sync.hsync != 0 && sync.vsync != 0) {
+            s_lt8912b_mapping_valid = true;
+            s_lt8912b_pn_swap = candidates[i].pn_swap;
+            s_lt8912b_lane_swap = candidates[i].lane_swap;
+            ESP_LOGI(TAG, "LT8912B MIPI mapping selected: pn_swap=%d lane_swap=%d",
+                     candidates[i].pn_swap, candidates[i].lane_swap);
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGW(TAG, "No LT8912B MIPI mapping reported valid sync; restoring configured mapping");
+#endif
+
+    ESP_RETURN_ON_ERROR(lt8912b_apply_mipi_mapping(io_main, io_cec,
+                                                   preferred_pn_swap,
+                                                   preferred_lane_swap),
+                        TAG, "Apply configured LT8912B MIPI mapping failed");
+#if !CONFIG_BSP_LCD_LT8912B_MIPI_AUTO_DETECT
+    s_lt8912b_mapping_valid = true;
+    s_lt8912b_pn_swap = preferred_pn_swap;
+    s_lt8912b_lane_swap = preferred_lane_swap;
+#endif
+    return ESP_OK;
+}
+
+#if CONFIG_BSP_LCD_LT8912B_TEST_PATTERN
+static esp_err_t lt8912b_enable_test_pattern(esp_lcd_panel_io_handle_t io_cec,
+                                             const esp_lcd_panel_lt8912b_video_timing_t *timing)
+{
+    const uint32_t dds_initial_value = timing->pclk_mhz * 0x16C16;
+
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x72, 0x12), TAG, "Set LT8912B pattern mode failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x73, (uint8_t)((timing->hs + timing->hbp) % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x74, (uint8_t)((timing->hs + timing->hbp) / 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x75, (uint8_t)((timing->vs + timing->vbp) % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x76, (uint8_t)(timing->hact % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x77, (uint8_t)(timing->vact % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x78,
+                                          (uint8_t)(((timing->vact / 256) << 4) + (timing->hact / 256))),
+                        TAG, "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x79, (uint8_t)(timing->htotal % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x7a, (uint8_t)(timing->vtotal % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x7b,
+                                          (uint8_t)(((timing->vtotal / 256) << 4) + (timing->htotal / 256))),
+                        TAG, "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x7c, (uint8_t)(timing->hs % 256)), TAG,
+                        "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x7d,
+                                          (uint8_t)(((timing->hs / 256) << 6) + (timing->vs % 256))),
+                        TAG, "Set LT8912B pattern timing failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x70, 0x80), TAG, "Enable LT8912B pattern failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x71, 0x51), TAG, "Enable LT8912B pattern failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x42, 0x12), TAG, "Enable LT8912B pattern failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x1e, 0x67), TAG, "Set LT8912B pattern clock source failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x4e, (uint8_t)(dds_initial_value & 0x000000ff)), TAG,
+                        "Set LT8912B pattern pixel clock failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x4f, (uint8_t)((dds_initial_value & 0x0000ff00) >> 8)), TAG,
+                        "Set LT8912B pattern pixel clock failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x50, (uint8_t)((dds_initial_value & 0x00ff0000) >> 16)), TAG,
+                        "Set LT8912B pattern pixel clock failed");
+    ESP_RETURN_ON_ERROR(lt8912b_write_reg(io_cec, 0x51, 0x80), TAG, "Enable LT8912B pattern pixel clock failed");
+
+    ESP_LOGW(TAG, "LT8912B built-in test pattern enabled");
+    return ESP_OK;
+}
+#endif
+#endif
 
 esp_err_t t5_board_c6_set_reset(bool enable)
 {
@@ -1368,6 +1563,12 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
                       "Create LT8912B panel failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(handles.panel), err, TAG, "LT8912B panel reset failed");
     ESP_GOTO_ON_ERROR(esp_lcd_panel_init(handles.panel), err, TAG, "LT8912B panel init failed");
+    ESP_GOTO_ON_ERROR(lt8912b_configure_mipi_mapping(handles.io, handles.io_cec), err, TAG,
+                      "Configure LT8912B MIPI mapping failed");
+#if CONFIG_BSP_LCD_LT8912B_TEST_PATTERN
+    ESP_GOTO_ON_ERROR(lt8912b_enable_test_pattern(handles.io_cec, &vendor_config.video_timing), err, TAG,
+                      "Enable LT8912B test pattern failed");
+#endif
 
     bool hdmi_ready = false;
     for (int attempt = 0; attempt < HDMI_READY_RETRY_COUNT; ++attempt) {
@@ -1381,8 +1582,9 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
     }
 
     ESP_LOGI(TAG, "LT8912B HPD/ready after init: %s", hdmi_ready ? "ready" : "not ready");
-    ESP_LOGI(TAG, "LT8912B diagnostics config: test_pattern=%d pn_swap=%d lane_swap=%d",
+    ESP_LOGI(TAG, "LT8912B diagnostics config: test_pattern=%d auto_detect=%d pn_swap=%d lane_swap=%d",
              CONFIG_BSP_LCD_LT8912B_TEST_PATTERN,
+             CONFIG_BSP_LCD_LT8912B_MIPI_AUTO_DETECT,
              CONFIG_BSP_LCD_LT8912B_MIPI_PN_SWAP,
              CONFIG_BSP_LCD_LT8912B_MIPI_LANE_SWAP);
 #if CONFIG_BSP_LCD_LT8912B_TEST_PATTERN
@@ -1402,9 +1604,21 @@ err:
 #endif
 }
 
+esp_err_t bsp_display_hdmi_recover_mipi(void)
+{
+#if !CONFIG_BSP_LCD_TYPE_HDMI
+    return ESP_ERR_NOT_SUPPORTED;
+#else
+    ESP_RETURN_ON_FALSE(s_display_handles.io != NULL && s_display_handles.io_cec != NULL,
+                        ESP_ERR_INVALID_STATE, TAG, "HDMI display is not initialized");
+    return lt8912b_configure_mipi_mapping(s_display_handles.io, s_display_handles.io_cec);
+#endif
+}
+
 void bsp_display_delete(void)
 {
     display_handles_reset(&s_display_handles);
+    s_lt8912b_mapping_valid = false;
     bsp_disable_dsi_phy_power();
     t5_board_hdmi_power_off();
     bsp_display_brightness_deinit();
