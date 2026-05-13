@@ -129,12 +129,19 @@ idf.py -p <PORT> flash monitor
 | SPI MOSI | `46` |
 | SD CS | `47` |
 | Touch INT | `3` |
+| HDMI INT | `4` |
+| PCA9535 INT | `5` |
+| XL9555 INT / ALL_INT | `6` |
+| HDMI DDC SDA/SCL | `9 / 10` |
 | C6 SDIO D0/D1/D2/D3 | `14 / 15 / 16 / 17` |
 | C6 SDIO CLK/CMD | `18 / 19` |
-| C6 RST | `54` |
-| C6 WAKEUP | `6` |
+| C6 RST/EN | `XL9555 P13` |
+| C6 WAKEUP | `XL9555 P14` |
+| EPD STV | `48` |
+| Frontlight PWM1/PWM2 | `53 / 54` |
+| HDMI RST / EN | `XL9555 P10 / P11` |
 
-如果你需要完整引脚定义，请看 `docs/pinmap.md` 或具体示例代码。
+V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复位/唤醒都已经从旧 `PCA9535` 映射迁到 `XL9555`。如果你需要完整引脚定义，请看 `docs/pinmap.md` 或具体示例代码。
 
 ## 常见问题
 
@@ -174,106 +181,113 @@ idf.py -p <PORT> flash monitor
 
 ---
 
-## 引脚 🎁
+## 引脚定义（V0.2）
 ~~~c
-// IIC Addr
-#define BOARD_I2C_ADDR_14           (0x14)
-#define BOARD_I2C_ADDR_ES8311       (0x18)
-#define BOARD_I2C_ADDR_PCA9535      (0x20) // PCA9535PW
-#define BOARD_I2C_ADDR_SGM38121     (0x28)
-#define BOARD_I2C_ADDR_48           (0x48) // LT8912
-#define BOARD_I2C_ADDR_49           (0x49)
-#define BOARD_I2C_ADDR_4A           (0x4A)
-#define BOARD_I2C_ADDR_4B           (0x4B)
-// #define BOARD_I2C_ADDR_TOUCH        (0x38) // FT5536
-#define BOARD_I2C_ADDR_TOUCH        (0x5D) // GT911
-#define BOARD_I2C_ADDR_BQ27220      (0x55) // BQ27220
-#define BOARD_I2C_ADDR_TPS651851    (0x68)
-#define BOARD_I2C_ADDR_BQ25896      (0x6B) // BQ25896
+// Shared I2C
+#define BOARD_I2C_SDA                 (7)
+#define BOARD_I2C_SCL                 (8)
 
-// IIC
-#define BOARD_I2C_SDA       (7)
-#define BOARD_I2C_SCL       (8)
+// I2C devices
+#define BOARD_I2C_ADDR_ES8311         (0x18)
+#define BOARD_I2C_ADDR_PCA9535        (0x20) // EPD/TPS only on V0.2
+#define BOARD_I2C_ADDR_XL9555         (0x22) // V0.2 control expander
+#define BOARD_I2C_ADDR_SGM38121       (0x28)
+#define BOARD_I2C_ADDR_TOUCH          (0x5D) // GT911
+#define BOARD_I2C_ADDR_BQ27220        (0x55)
+#define BOARD_I2C_ADDR_TPS651851      (0x68)
+#define BOARD_I2C_ADDR_BQ25896        (0x6B)
+#define BOARD_I2C_ADDR_LT8912B_MAIN   (0x48)
+#define BOARD_I2C_ADDR_LT8912B_CEC    (0x49)
+#define BOARD_I2C_ADDR_LT8912B_AVI    (0x4A)
 
-// SPI 
-#define BOARD_SPI_MISO (44)
-#define BOARD_SPI_SCK  (45)
-#define BOARD_SPI_MOSI (46)
+// Direct GPIO
+#define BOARD_TOUCH_INT               (3)
+#define BOARD_HDMI_INT                (4)
+#define BOARD_PCA9535_INT             (5)
+#define BOARD_XL9555_INT              (6)  // ALL_INT
+#define BOARD_HDMI_DDC_SDA            (9)
+#define BOARD_HDMI_DDC_SCL            (10)
+#define BOARD_BOOT                    (35)
 
-// PCA9535PW  --  IO expansion
-#define BOARD_PCA_INT             (5)
-#define BOARD_PCA_SDA             BOARD_I2C_SDA
-#define BOARD_PCA_SCL             BOARD_I2C_SCL
-#define BOARD_PCA_00_T_RST        (0)
-#define BOARD_PCA_01_CC_SW0       (1)
-#define BOARD_PCA_02_CC_SW1       (2)
-#define BOARD_PCA_03_LR_RST       (3)
-#define BOARD_PCA_04_NRF_CE       (4)
-#define BOARD_PCA_05_SHUTDOWN     (5)
-#define BOARD_PCA_06_HDMI_RST     (6)
-#define BOARD_PCA_07_HDMI_EN      (7)
-#define BOARD_PCA_10_EP_OE        (8)
-#define BOARD_PCA_11_EP_MODE      (9)
-#define BOARD_PCA_12_1V8_EN       (10)
-#define BOARD_PCA_13_TPS_PWRUP    (11)
-#define BOARD_PCA_14_VCOM_CTRL    (12)
-#define BOARD_PCA_15_TPS_WAKEUP   (13)
-#define BOARD_PCA_16_TPS_PWR_GOOD (14)
-#define BOARD_PCA_17_TPS_INT      (15)
+// SD Card / SPI
+#define BOARD_SD_MISO                 (44)
+#define BOARD_SD_SCK                  (45)
+#define BOARD_SD_MOSI                 (46)
+#define BOARD_SD_CS                   (47)
 
-// SD Card
-#define BOARD_SD_CS    (47)
-#define BOARD_SD_MISO  BOARD_SPI_MISO
-#define BOARD_SD_SCK   BOARD_SPI_SCK 
-#define BOARD_SD_MOSI  BOARD_SPI_MOSI
+// E-paper display
+#define BOARD_EPD_D0                  (27)
+#define BOARD_EPD_D1                  (28)
+#define BOARD_EPD_D2                  (29)
+#define BOARD_EPD_D3                  (30)
+#define BOARD_EPD_D4                  (31)
+#define BOARD_EPD_D5                  (32)
+#define BOARD_EPD_D6                  (33)
+#define BOARD_EPD_D7                  (34)
+#define BOARD_EPD_CKV                 (13)
+#define BOARD_EPD_CKH                 (24)
+#define BOARD_EPD_STH                 (25)
+#define BOARD_EPD_LEH                 (26)
+#define BOARD_EPD_STV                 (48)
+#define BOARD_FRONTLIGHT_LED1_PWM     (53)
+#define BOARD_FRONTLIGHT_LED2_PWM     (54)
 
-// Touch
-#define BOARD_TOUCH_INT     (3)
-#define BOARD_TOUCH_SDA     BOARD_I2C_SDA
-#define BOARD_TOUCH_SCL     BOARD_I2C_SCL
-#define BOARD_TOUCH_RST     BOARD_PCA_00_T_RST
+// ESP32-C6 SDIO
+#define BOARD_C6_D0                   (14)
+#define BOARD_C6_D1                   (15)
+#define BOARD_C6_D2                   (16)
+#define BOARD_C6_D3                   (17)
+#define BOARD_C6_CLK                  (18)
+#define BOARD_C6_CMD                  (19)
 
-// Display
-#define BOARD_DISPALY_D7    (34)
-#define BOARD_DISPALY_D6    (33)
-#define BOARD_DISPALY_D5    (32)
-#define BOARD_DISPALY_D4    (31)
-#define BOARD_DISPALY_D3    (30)
-#define BOARD_DISPALY_D2    (29)
-#define BOARD_DISPALY_D1    (28)
-#define BOARD_DISPALY_D0    (27)
-#define BOARD_DISPALY_CKV   (13)
-#define BOARD_DISPALY_STH   (25)
-#define BOARD_DISPALY_LEH   (26)
-#define BOARD_DISPALY_STV   (36)
-#define BOARD_DISPALY_CKH   (24)
-#define BOARD_DISPALY_LED1  (11)
-#define BOARD_DISPALY_LED2  (12)
+// ES8311 audio
+#define BOARD_ES8311_I2S_DOUT         (39) // ESP32 -> ES8311 DSDIN
+#define BOARD_ES8311_I2S_LRCK         (40)
+#define BOARD_ES8311_I2S_DIN          (41) // ES8311 ASDOUT -> ESP32
+#define BOARD_ES8311_I2S_SCLK         (42)
+#define BOARD_ES8311_I2S_MCLK         (43)
 
-// ESP32C6 MINI
-#define BOARD_C6_D0     (14)
-#define BOARD_C6_D1     (15)
-#define BOARD_C6_D2     (16)
-#define BOARD_C6_D3     (17)
-#define BOARD_C6_CLK    (18)
-#define BOARD_C6_CMD    (19)
-#define BOARD_C6_RST    (54)
-#define BOARD_C6_WAKEUP (6)
+// XL9555 IO expander, I2C address 0x22.
+// Values below are zero-based IO indexes used by the BSP; comments show chip port names.
+#define BOARD_XL_IO_TOUCH_RST         (0)  // P00, T_RST
+#define BOARD_XL_IO_CC_SW0            (1)  // P01
+#define BOARD_XL_IO_CC_SW1            (2)  // P02
+#define BOARD_XL_IO_LR_RST            (3)  // P03
+#define BOARD_XL_IO_NRF_CE            (4)  // P04
+#define BOARD_XL_IO_AUDIO_SHUTDOWN    (6)  // P06, SHUTDOWN
+#define BOARD_XL_IO_AUDIO_SEL         (7)  // P07, AUDIO_SEL
+#define BOARD_XL_IO_HDMI_RST          (8)  // P10, HDMI_RST
+#define BOARD_XL_IO_HDMI_EN           (9)  // P11, HDMI_EN
+#define BOARD_XL_IO_SENSOR_IRQ        (10) // P12, SEN_IRQ
+#define BOARD_XL_IO_C6_RST            (11) // P13, C6_RST/EN
+#define BOARD_XL_IO_C6_WAKEUP         (12) // P14, C6_WAKEUP
 
-// ES8311
-#define BOARD_ES8311_I2C_SDA    BOARD_I2C_SDA
-#define BOARD_ES8311_I2C_SCL    BOARD_I2C_SCL
-#define BOARD_ES8311_I2S_MCLK   (43)
-#define BOARD_ES8311_I2S_SCLK   (42)
-#define BOARD_ES8311_I2S_ASDOUT (39)
-#define BOARD_ES8311_I2S_LRCK   (40)
-#define BOARD_ES8311_I2S_DSDIN  (41)
+// PCA9535 IO expander, I2C address 0x20.
+// V0.2 keeps PCA9535 for EPD/TPS control only.
+#define BOARD_PCA_IO_EPD_OE           (8)  // IO1_0, EP_OE
+#define BOARD_PCA_IO_EPD_MODE         (9)  // IO1_1, EP_MODE
+#define BOARD_PCA_IO_TPS_PWRUP        (11) // IO1_3, TPS_PWRUP
+#define BOARD_PCA_IO_VCOM_CTRL        (12) // IO1_4, VCOM_CTRL
+#define BOARD_PCA_IO_TPS_WAKEUP       (13) // IO1_5, TPS_WAKEUP
+#define BOARD_PCA_IO_TPS_PWR_GOOD     (14) // IO1_6, TPS_PWR_GOOD
+#define BOARD_PCA_IO_TPS_INT          (15) // IO1_7, TPS_INT
 
-// MIPI to HDMI
-#define BOARD_HDMI_RST (BOARD_PCA_06_HDMI_RST)
-#define BOARD_HDMI_INT (4)
-#define BOARD_HDMI_SDA (BOARD_I2C_SDA)
-#define BOARD_HDMI_SCL (BOARD_I2C_SCL)
-#define BOARD_HDMI_DDC_SDA (9)
-#define BOARD_HDMI_DDC_SCL (10)
+// HDMI / LT8912B
+#define BOARD_HDMI_SDA                BOARD_I2C_SDA
+#define BOARD_HDMI_SCL                BOARD_I2C_SCL
+#define BOARD_HDMI_RST                BOARD_XL_IO_HDMI_RST
+#define BOARD_HDMI_EN                 BOARD_XL_IO_HDMI_EN
+
+// Expansion header GPIO changes in V0.2
+#define BOARD_EXT_LR_IRQ_GPS_PPS      (2)
+#define BOARD_EXT_NFC_IRQ             (11)
+#define BOARD_EXT_NRF_IRQ_7682_DTR    (12)
+#define BOARD_EXT_LR_CS_GPS_TX        (20)
+#define BOARD_EXT_LR_BUSY_GPS_RX      (21)
+#define BOARD_EXT_NFC_CS              (22)
+#define BOARD_EXT_CC_GDO2_7682_TXD    (23)
+#define BOARD_EXT_CC_GDO0_7682_RXD    (49)
+#define BOARD_EXT_CC_CS_7682_RST      (50)
+#define BOARD_EXT_NRF_CS_7682_RI      (51)
+#define BOARD_EXT_MODULE_EN_POWER_KEY (52)
 ~~~

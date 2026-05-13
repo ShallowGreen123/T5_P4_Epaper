@@ -13,6 +13,7 @@
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_lt8912b.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -41,6 +42,7 @@ static const char *TAG = "hdmi_lvgl";
 #define HDMI_RGB888_BYTES_PER_PIXEL 3U
 #define HDMI_RGB888_BUFFER_SIZE     ((size_t)DISPLAY_PIXEL_COUNT * HDMI_RGB888_BYTES_PER_PIXEL)
 #define DISPLAY_FLUSH_TIMEOUT_MS    1000
+#define DISPLAY_BOOT_TEST_FRAME_DELAY_MS 500
 #define LVGL_TICK_PERIOD_MS         1
 #define LVGL_TASK_MAX_DELAY_MS      10
 
@@ -97,6 +99,60 @@ static void convert_lvgl_to_hdmi_rgb888(const lv_color_t *src,
             dst_row[dst_offset + 2] = LV_COLOR_GET_R(color);
         }
     }
+}
+
+static void fill_boot_diagnostic_frame(uint8_t *buffer, uint32_t width, uint32_t height)
+{
+    if (buffer == NULL) {
+        return;
+    }
+
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            uint8_t shade = 0x10;
+            if (x < (width / 3U)) {
+                shade = 0xFF;
+            } else if (x < ((width * 2U) / 3U)) {
+                shade = 0x88;
+            }
+
+            const size_t offset = ((size_t)y * width + x) * HDMI_RGB888_BYTES_PER_PIXEL;
+            buffer[offset + 0] = shade;
+            buffer[offset + 1] = shade;
+            buffer[offset + 2] = shade;
+        }
+    }
+}
+
+static esp_err_t submit_boot_diagnostic_frame(void)
+{
+    if (s_lcd_panel == NULL || s_hdmi_flush_buffer == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    fill_boot_diagnostic_frame(s_hdmi_flush_buffer, DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES);
+
+    if (s_trans_done_sem) {
+        xSemaphoreTake(s_trans_done_sem, 0);
+    }
+
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, 0, 0,
+                                              DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES,
+                                              s_hdmi_flush_buffer);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to submit boot diagnostic frame: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    if (s_trans_done_sem &&
+        xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DISPLAY_FLUSH_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "Boot diagnostic frame flush timeout");
+    }
+
+    const bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(s_lcd_panel);
+    ESP_LOGI(TAG, "Submitted boot diagnostic frame, LT8912 ready=%s", hdmi_ready ? "yes" : "no");
+    vTaskDelay(pdMS_TO_TICKS(DISPLAY_BOOT_TEST_FRAME_DELAY_MS));
+    return ESP_OK;
 }
 
 static void lvgl_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
@@ -160,8 +216,9 @@ static void lvgl_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_col
 
     s_flush_count++;
     if (s_flush_count <= 3 || (s_flush_count % 120) == 0) {
-        ESP_LOGI(TAG, "Flushed LVGL frame #%" PRIu32 " (%" PRIu32 "x%" PRIu32 ")",
-                 s_flush_count, flush_w, flush_h);
+        const bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(s_lcd_panel);
+        ESP_LOGI(TAG, "Flushed LVGL frame #%" PRIu32 " (%" PRIu32 "x%" PRIu32 "), LT8912 ready=%s",
+                 s_flush_count, flush_w, flush_h, hdmi_ready ? "yes" : "no");
     }
 
     lv_disp_flush_ready(disp_drv);
@@ -267,6 +324,12 @@ static esp_err_t init_lvgl_port(void)
 #endif
 
     ret = allocate_lvgl_buffers();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Submitting boot diagnostic frame before LVGL demo");
+    ret = submit_boot_diagnostic_frame();
     if (ret != ESP_OK) {
         return ret;
     }
