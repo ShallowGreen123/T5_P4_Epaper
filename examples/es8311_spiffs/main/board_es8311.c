@@ -15,7 +15,7 @@ static const char *TAG = "es8311_spiffs";
 
 esp_err_t board_audio_amp_set(bool enable)
 {
-    ESP_RETURN_ON_ERROR(t5_board_audio_select_speaker(false), TAG, "Select speaker path failed");
+    ESP_RETURN_ON_ERROR(t5_board_audio_select_speaker(true), TAG, "Select speaker path failed");
     ESP_RETURN_ON_ERROR(t5_board_audio_amp_enable(enable), TAG, "Set audio amplifier state failed");
     ESP_LOGI(TAG, "Audio amplifier %s through XL9555 P06", enable ? "enabled" : "disabled");
     return ESP_OK;
