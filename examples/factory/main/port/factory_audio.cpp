@@ -26,10 +26,11 @@ namespace {
 constexpr char TAG[] = "factory_audio";
 
 constexpr uint8_t kEs8311Addr = 0x18;
-constexpr uint8_t kPca9535Addr = 0x20;
-constexpr uint8_t kPcaOutputPort0Reg = 0x02;
-constexpr uint8_t kPcaConfigPort0Reg = 0x06;
-constexpr uint8_t kAmpEnableMask = (1U << FACTORY_PCA_SHUTDOWN);
+constexpr uint8_t kXl9555Addr = 0x22;
+constexpr uint8_t kXlOutputPort0Reg = 0x02;
+constexpr uint8_t kXlConfigPort0Reg = 0x06;
+constexpr uint8_t kAmpEnableMask = (1U << 6);
+constexpr uint8_t kAudioSelectMask = (1U << 7);
 constexpr uint32_t kSampleRate = CONFIG_FACTORY_AUDIO_SAMPLE_RATE;
 constexpr uint32_t kRecordSeconds = CONFIG_FACTORY_AUDIO_RECORD_SECONDS;
 constexpr uint8_t kVolumePercent = CONFIG_FACTORY_AUDIO_VOLUME_PERCENT;
@@ -109,7 +110,7 @@ enum es8311_reg_t : uint8_t {
 };
 
 static i2c_master_dev_handle_t s_codec_dev = nullptr;
-static i2c_master_dev_handle_t s_pca_dev = nullptr;
+static i2c_master_dev_handle_t s_xl_dev = nullptr;
 static i2s_chan_handle_t s_tx_handle = nullptr;
 static i2s_chan_handle_t s_rx_handle = nullptr;
 static QueueHandle_t s_cmd_queue = nullptr;
@@ -226,52 +227,53 @@ static esp_err_t codec_read(uint8_t reg, uint8_t *value)
     return i2c_master_transmit_receive(s_codec_dev, &reg, 1, value, 1, kI2cTimeoutMs);
 }
 
-static esp_err_t pca_write(uint8_t reg, uint8_t value)
+static esp_err_t xl_write(uint8_t reg, uint8_t value)
 {
-    if (s_pca_dev == nullptr) {
+    if (s_xl_dev == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
     const uint8_t data[2] = {reg, value};
-    return i2c_master_transmit(s_pca_dev, data, sizeof(data), kI2cTimeoutMs);
+    return i2c_master_transmit(s_xl_dev, data, sizeof(data), kI2cTimeoutMs);
 }
 
-static esp_err_t pca_read(uint8_t reg, uint8_t *value)
+static esp_err_t xl_read(uint8_t reg, uint8_t *value)
 {
-    if (s_pca_dev == nullptr) {
+    if (s_xl_dev == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    return i2c_master_transmit_receive(s_pca_dev, &reg, 1, value, 1, kI2cTimeoutMs);
+    return i2c_master_transmit_receive(s_xl_dev, &reg, 1, value, 1, kI2cTimeoutMs);
 }
 
 static esp_err_t audio_amp_set(bool enable)
 {
-    if (s_pca_dev == nullptr) {
+    if (s_xl_dev == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 
     uint8_t output = 0;
     uint8_t config = 0xFF;
-    esp_err_t ret = pca_read(kPcaOutputPort0Reg, &output);
+    esp_err_t ret = xl_read(kXlOutputPort0Reg, &output);
     if (ret != ESP_OK) {
         return ret;
     }
-    ret = pca_read(kPcaConfigPort0Reg, &config);
+    ret = xl_read(kXlConfigPort0Reg, &config);
     if (ret != ESP_OK) {
         return ret;
     }
 
+    output &= (uint8_t)~kAudioSelectMask;
     if (enable) {
         output |= kAmpEnableMask;
     } else {
         output &= (uint8_t)~kAmpEnableMask;
     }
-    config &= (uint8_t)~kAmpEnableMask;
+    config &= (uint8_t)~(kAmpEnableMask | kAudioSelectMask);
 
-    ret = pca_write(kPcaOutputPort0Reg, output);
+    ret = xl_write(kXlOutputPort0Reg, output);
     if (ret != ESP_OK) {
         return ret;
     }
-    ret = pca_write(kPcaConfigPort0Reg, config);
+    ret = xl_write(kXlConfigPort0Reg, config);
     if (ret != ESP_OK) {
         return ret;
     }
@@ -817,10 +819,10 @@ extern "C" bool factory_audio_init(void)
         return false;
     }
 
-    ret = add_i2c_device(kPca9535Addr, &s_pca_dev);
+    ret = add_i2c_device(kXl9555Addr, &s_xl_dev);
     const bool amp_control_ready = ret == ESP_OK;
     if (!amp_control_ready) {
-        ESP_LOGW(TAG, "PCA9535 amp control unavailable: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "XL9555 audio control unavailable: %s", esp_err_to_name(ret));
     }
 
     if (!allocate_record_buffer()) {

@@ -254,8 +254,8 @@ V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复�
 #define BOARD_XL_IO_CC_SW1            (2)  // P02
 #define BOARD_XL_IO_LR_RST            (3)  // P03
 #define BOARD_XL_IO_NRF_CE            (4)  // P04
-#define BOARD_XL_IO_AUDIO_SHUTDOWN    (6)  // P06, SHUTDOWN
-#define BOARD_XL_IO_AUDIO_SEL         (7)  // P07, AUDIO_SEL
+#define BOARD_XL_IO_AUDIO_SHUTDOWN    (6)  // P06, Power amplifier, HIGH the effective rate.
+#define BOARD_XL_IO_AUDIO_SEL         (7)  // P07, AUDIO_SEL, LOW the effective rate.
 #define BOARD_XL_IO_HDMI_RST          (8)  // P10, HDMI_RST
 #define BOARD_XL_IO_HDMI_EN           (9)  // P11, HDMI_EN
 #define BOARD_XL_IO_SENSOR_IRQ        (10) // P12, SEN_IRQ
