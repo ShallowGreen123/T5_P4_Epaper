@@ -166,14 +166,6 @@ static int get_cached_level(const uint8_t input_state[2], uint8_t io_num)
     return (input_state[port] & bit) ? 1 : 0;
 }
 
-static esp_err_t configure_cached_input(uint8_t *config_state, uint8_t io_num)
-{
-    const uint8_t port = io_num / 8;
-    const uint8_t bit = 1U << (io_num % 8);
-    config_state[port] |= bit;
-    return ESP_OK;
-}
-
 static void log_sdspi_pin_levels(const char *stage)
 {
     ESP_LOGI(TAG,
@@ -688,7 +680,7 @@ void t5_board_touch_delete(esp_lcd_touch_handle_t touch, esp_lcd_panel_io_handle
 
 esp_err_t t5_board_audio_select_speaker(bool speaker_enabled)
 {
-    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SEL, speaker_enabled);
+    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SEL, !speaker_enabled);
 }
 
 esp_err_t t5_board_audio_amp_enable(bool enable)

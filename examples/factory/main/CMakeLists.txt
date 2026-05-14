@@ -16,12 +16,7 @@ idf_component_register(
     REQUIRES
         esp_event
         esp_cam_sensor
-        esp_driver_gpio
-        esp_driver_i2c
-        esp_driver_i2s
-        esp_driver_sdspi
         esp_driver_spi
-        esp_lcd
         esp_netif
         esp_psram
         esp_hw_support
@@ -29,13 +24,13 @@ idf_component_register(
         esp_timer
         esp_video
         esp_wifi
-        fatfs
         fastepd
         bq25896
         bq27220
         lvgl
         nvs_flash
         sdmmc
+        t5_p4_board
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

@@ -58,7 +58,7 @@ dependencies:
       type: service
     version: 1.5.9
   espressif/esp_hosted:
-    component_hash: a424e4cf8de13b657d09f14dbd615cc946cffdc3f032509915d3058f4637fa72
+    component_hash: e23eb702781c804a62909e5394da0641a2bff9adccec6673a7bff60ce8c8b756
     dependencies:
     - name: idf
       require: private
@@ -66,7 +66,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.12.7
+    version: 2.12.3
   espressif/esp_io_expander:
     component_hash: 7b7f91270172e46ca4597e3874f48d8412e280e8c295559f5922ec38656e3e5f
     dependencies:
@@ -198,6 +198,6 @@ direct_dependencies:
 - idf
 - sheldonix/esp_io_expander_xl9555
 - wngfra/esp_io_expander_pca9535
-manifest_hash: 3eb47ea7a181f1026c2ea2572aa8e3475121d8becb53f039d9585dd2a0639ff4
+manifest_hash: ace36bfba82ec9f458a0924b4a476104eaaf5d4d3e6345bf2e036580bfffe2e4
 target: esp32p4
 version: 2.0.0

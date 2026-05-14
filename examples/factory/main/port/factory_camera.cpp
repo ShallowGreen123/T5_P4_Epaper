@@ -11,10 +11,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "board_config.h"
-#include "driver/i2c_master.h"
 #include "esp_cam_sensor_xclk.h"
-#include "esp_bit_defs.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -25,8 +22,7 @@
 #include "linux/videodev2.h"
 #include "sdkconfig.h"
 
-#include "factory_display.h"
-
+#include "bsp/esp-bsp.h"
 #ifndef CONFIG_FACTORY_CAMERA_ENABLE
 #define CONFIG_FACTORY_CAMERA_ENABLE 1
 #endif
@@ -87,22 +83,6 @@ namespace {
 
 static const char *TAG = "factory_camera";
 
-constexpr uint8_t SGM38121_I2C_ADDR = 0x28;
-constexpr uint8_t SGM38121_REG_CHIP_REV = 0x00;
-constexpr uint8_t SGM38121_REG_DISCH = 0x02;
-constexpr uint8_t SGM38121_REG_DVDD1_VOUT = 0x03;
-constexpr uint8_t SGM38121_REG_DVDD2_VOUT = 0x04;
-constexpr uint8_t SGM38121_REG_AVDD1_VOUT = 0x05;
-constexpr uint8_t SGM38121_REG_AVDD2_VOUT = 0x06;
-constexpr uint8_t SGM38121_REG_FUNCTION = 0x07;
-constexpr uint8_t SGM38121_REG_SEQ_DVDD = 0x0A;
-constexpr uint8_t SGM38121_REG_SEQ_AVDD = 0x0B;
-constexpr uint8_t SGM38121_REG_ENABLE = 0x0E;
-constexpr uint8_t SGM38121_ENABLE_DVDD1_BIT = BIT0;
-constexpr uint8_t SGM38121_ENABLE_DVDD2_BIT = BIT1;
-constexpr uint8_t SGM38121_ENABLE_AVDD1_BIT = BIT2;
-constexpr uint8_t SGM38121_ENABLE_AVDD2_BIT = BIT3;
-
 constexpr uint8_t CAMERA_SCCB_ADDR_SC2336 = 0x30;
 constexpr uint8_t CAMERA_SCCB_ADDR_OV2710 = 0x36;
 constexpr uint8_t CAMERA_SCCB_ADDR_OV5645 = 0x3C;
@@ -159,76 +139,12 @@ static bool check_ioctl(int ret, const char *operation)
     return false;
 }
 
-static uint8_t sgm_encode_vout_mv_rounded(
-    int target_mv,
-    int min_mv,
-    int max_mv,
-    int offset_mv,
-    int min_reg,
-    int max_reg,
-    int *actual_mv)
+static i2c_master_bus_handle_t shared_i2c_bus()
 {
-    int clamped_mv = target_mv;
-    if (clamped_mv < min_mv) {
-        clamped_mv = min_mv;
+    if (bsp_i2c_init() != ESP_OK) {
+        return nullptr;
     }
-    if (clamped_mv > max_mv) {
-        clamped_mv = max_mv;
-    }
-
-    int reg_value = (clamped_mv - offset_mv + 4) / 8;
-    if (reg_value < min_reg) {
-        reg_value = min_reg;
-    }
-    if (reg_value > max_reg) {
-        reg_value = max_reg;
-    }
-
-    if (actual_mv != nullptr) {
-        *actual_mv = offset_mv + (reg_value * 8);
-    }
-
-    return (uint8_t)reg_value;
-}
-
-static uint8_t sgm_encode_dvdd_mv_rounded(int target_mv, int *actual_mv)
-{
-    return sgm_encode_vout_mv_rounded(target_mv, 528, 1504, 504, 0x03, 0x7D, actual_mv);
-}
-
-static uint8_t sgm_encode_avdd_mv_rounded(int target_mv, int *actual_mv)
-{
-    return sgm_encode_vout_mv_rounded(target_mv, 1504, 3424, 1384, 0x0F, 0xFF, actual_mv);
-}
-
-static esp_err_t add_sgm_device(i2c_master_dev_handle_t *out_dev)
-{
-    i2c_master_bus_handle_t bus = factory_display_get_i2c_bus();
-    if (bus == nullptr || out_dev == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t err = i2c_master_probe(bus, SGM38121_I2C_ADDR, kI2cTimeoutMs);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    i2c_device_config_t dev_cfg = {};
-    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address = SGM38121_I2C_ADDR;
-    dev_cfg.scl_speed_hz = CONFIG_FACTORY_CAMERA_I2C_FREQ_HZ;
-    return i2c_master_bus_add_device(bus, &dev_cfg, out_dev);
-}
-
-static esp_err_t sgm_read_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *value)
-{
-    return i2c_master_transmit_receive(dev, &reg, sizeof(reg), value, 1, kI2cTimeoutMs);
-}
-
-static esp_err_t sgm_write_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t value)
-{
-    uint8_t payload[2] = {reg, value};
-    return i2c_master_transmit(dev, payload, sizeof(payload), kI2cTimeoutMs);
+    return bsp_i2c_get_handle();
 }
 
 static bool is_supported_pixel_format(uint32_t pixel_format)
@@ -359,55 +275,13 @@ extern "C" bool factory_camera_power_on(void)
 #if !CONFIG_FACTORY_CAMERA_ENABLE || !CONFIG_FACTORY_CAMERA_ENABLE_POWER
     return true;
 #else
-    i2c_master_dev_handle_t sgm = nullptr;
-    uint8_t chip_rev = 0;
-    int avdd1_actual_mv = 0;
-    int avdd2_actual_mv = 0;
-    int dvdd1_actual_mv = 0;
-    int dvdd2_actual_mv = 0;
-    const uint8_t avdd1_reg = sgm_encode_avdd_mv_rounded(CONFIG_FACTORY_CAMERA_AVDD1_MV, &avdd1_actual_mv);
-    const uint8_t avdd2_reg = sgm_encode_avdd_mv_rounded(CONFIG_FACTORY_CAMERA_AVDD2_MV, &avdd2_actual_mv);
-    uint8_t enable_mask = SGM38121_ENABLE_AVDD1_BIT | SGM38121_ENABLE_AVDD2_BIT;
-
-    if (!check_esp(add_sgm_device(&sgm), "add SGM38121 camera power device")) {
-        return false;
-    }
-
-    if (sgm_read_reg(sgm, SGM38121_REG_CHIP_REV, &chip_rev) == ESP_OK) {
-        ESP_LOGI(TAG, "SGM38121 CHIP_REV=0x%02X", chip_rev);
-    }
-
-    ESP_LOGI(TAG,
-             "enable camera rails: AVDD1=%d mV AVDD2=%d mV",
-             avdd1_actual_mv,
-             avdd2_actual_mv);
-
-    bool ok = true;
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_SEQ_DVDD, 0x00), "set SGM38121 DVDD sequence");
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_SEQ_AVDD, 0x00), "set SGM38121 AVDD sequence");
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_FUNCTION, 0x00), "disable SGM38121 wake-up");
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_DISCH, 0x00), "set SGM38121 discharge mode");
-
-    if (CONFIG_FACTORY_CAMERA_DVDD1_MV > 0) {
-        const uint8_t dvdd1_reg = sgm_encode_dvdd_mv_rounded(CONFIG_FACTORY_CAMERA_DVDD1_MV, &dvdd1_actual_mv);
-        enable_mask |= SGM38121_ENABLE_DVDD1_BIT;
-        ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_DVDD1_VOUT, dvdd1_reg), "write SGM38121 DVDD1");
-    }
-    if (CONFIG_FACTORY_CAMERA_DVDD2_MV > 0) {
-        const uint8_t dvdd2_reg = sgm_encode_dvdd_mv_rounded(CONFIG_FACTORY_CAMERA_DVDD2_MV, &dvdd2_actual_mv);
-        enable_mask |= SGM38121_ENABLE_DVDD2_BIT;
-        ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_DVDD2_VOUT, dvdd2_reg), "write SGM38121 DVDD2");
-    }
-
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_AVDD1_VOUT, avdd1_reg), "write SGM38121 AVDD1");
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_AVDD2_VOUT, avdd2_reg), "write SGM38121 AVDD2");
-    ok = ok && check_esp(sgm_write_reg(sgm, SGM38121_REG_ENABLE, enable_mask), "enable SGM38121 camera rails");
-
-    esp_err_t rm_err = i2c_master_bus_rm_device(sgm);
-    if (rm_err != ESP_OK) {
-        ESP_LOGW(TAG, "remove SGM38121 device failed: %s", esp_err_to_name(rm_err));
-    }
-
+    const t5_board_camera_power_config_t cfg = {
+        .dvdd1_mv = CONFIG_FACTORY_CAMERA_DVDD1_MV,
+        .dvdd2_mv = CONFIG_FACTORY_CAMERA_DVDD2_MV,
+        .avdd1_mv = CONFIG_FACTORY_CAMERA_AVDD1_MV,
+        .avdd2_mv = CONFIG_FACTORY_CAMERA_AVDD2_MV,
+    };
+    const bool ok = check_esp(t5_board_camera_power_on(&cfg), "power camera through t5_p4_board");
     if (ok) {
         vTaskDelay(pdMS_TO_TICKS(kCameraPowerSettleMs));
     }
@@ -418,18 +292,9 @@ extern "C" bool factory_camera_power_on(void)
 extern "C" void factory_camera_power_off(void)
 {
 #if CONFIG_FACTORY_CAMERA_ENABLE && CONFIG_FACTORY_CAMERA_ENABLE_POWER
-    i2c_master_dev_handle_t sgm = nullptr;
-    if (add_sgm_device(&sgm) != ESP_OK) {
-        return;
-    }
-
-    esp_err_t err = sgm_write_reg(sgm, SGM38121_REG_ENABLE, 0x00);
+    esp_err_t err = t5_board_camera_power_off();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "disable camera rails failed: %s", esp_err_to_name(err));
-    }
-    err = i2c_master_bus_rm_device(sgm);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "remove SGM38121 device failed: %s", esp_err_to_name(err));
     }
 #endif
 }
@@ -444,7 +309,7 @@ extern "C" bool factory_camera_init(void)
         return true;
     }
 
-    i2c_master_bus_handle_t shared_i2c = factory_display_get_i2c_bus();
+    i2c_master_bus_handle_t shared_i2c = shared_i2c_bus();
     if (shared_i2c == nullptr) {
         ESP_LOGE(TAG, "shared I2C bus is not ready");
         return false;
@@ -652,7 +517,7 @@ extern "C" bool factory_camera_get_frame_info(factory_camera_frame_info_t *out_i
 
 extern "C" bool factory_camera_is_detected(void)
 {
-    i2c_master_bus_handle_t bus = factory_display_get_i2c_bus();
+    i2c_master_bus_handle_t bus = shared_i2c_bus();
     if (bus == nullptr) {
         return false;
     }

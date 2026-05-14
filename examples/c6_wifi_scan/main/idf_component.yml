@@ -3,5 +3,3 @@ dependencies:
     version: ">=5.3"
   espressif/esp_wifi_remote:
     version: "^1.5.0"
-  espressif/esp_hosted:
-    version: "^2.12.3"

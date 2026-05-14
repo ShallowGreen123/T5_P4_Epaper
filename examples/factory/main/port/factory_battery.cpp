@@ -9,9 +9,9 @@
 #include "bq25896.h"
 #include "bq25896_hal_esp_idf.h"
 #include "bq27220.h"
+#include "bsp/esp-bsp.h"
 
 #include "board_config.h"
-#include "factory_display.h"
 
 namespace {
 
@@ -205,7 +205,12 @@ static void ensure_initialized()
         return;
     }
 
-    i2c_master_bus_handle_t bus_handle = factory_display_get_i2c_bus();
+    if (bsp_i2c_init() != ESP_OK) {
+        set_status_text("Shared I2C bus unavailable.");
+        return;
+    }
+
+    i2c_master_bus_handle_t bus_handle = bsp_i2c_get_handle();
     if (bus_handle == nullptr) {
         set_status_text("Shared I2C bus unavailable.");
         return;
@@ -278,7 +283,7 @@ extern "C" void factory_battery_refresh(void)
     ensure_initialized();
 
     std::memset(&s_state, 0, sizeof(s_state));
-    s_state.bus_ready = factory_display_get_i2c_bus() != nullptr;
+    s_state.bus_ready = (bsp_i2c_init() == ESP_OK) && (bsp_i2c_get_handle() != nullptr);
     s_state.charger_ready = s_bq25896_ready;
     s_state.gauge_ready = s_bq27220_ready;
     s_state.gauge_charge_voltage_mv = kBatteryProfile.charge_voltage_mv;

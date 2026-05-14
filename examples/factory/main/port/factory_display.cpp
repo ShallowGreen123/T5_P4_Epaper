@@ -11,6 +11,7 @@
 
 #include <FastEPD.h>
 
+#include "bsp/esp-bsp.h"
 #include "board_config.h"
 
 namespace {
@@ -509,17 +510,13 @@ static bool init_lvgl()
 static bool init_panel()
 {
     if (s_i2c_bus == nullptr) {
-        i2c_master_bus_config_t bus_config = {};
-        bus_config.i2c_port = I2C_NUM_0;
-        bus_config.sda_io_num = (gpio_num_t)FACTORY_TOUCH_I2C_SDA;
-        bus_config.scl_io_num = (gpio_num_t)FACTORY_TOUCH_I2C_SCL;
-        bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
-        bus_config.glitch_ignore_cnt = 7;
-        bus_config.flags.enable_internal_pullup = true;
-
-        esp_err_t err = i2c_new_master_bus(&bus_config, &s_i2c_bus);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(err));
+        if (bsp_i2c_init() != ESP_OK) {
+            ESP_LOGE(TAG, "bsp_i2c_init failed");
+            return false;
+        }
+        s_i2c_bus = bsp_i2c_get_handle();
+        if (s_i2c_bus == nullptr) {
+            ESP_LOGE(TAG, "bsp_i2c_get_handle returned null");
             return false;
         }
     }
@@ -590,11 +587,6 @@ extern "C" void factory_display_request_full_refresh(void)
 extern "C" const factory_display_mode_info_t *factory_display_get_mode_info(void)
 {
     return &s_mode_info;
-}
-
-extern "C" i2c_master_bus_handle_t factory_display_get_i2c_bus(void)
-{
-    return s_i2c_bus;
 }
 
 extern "C" void factory_display_set_rotation(uint16_t rotation_deg)

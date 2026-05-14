@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "t5_p4_board.h"
 
 namespace {
 
@@ -647,6 +648,12 @@ extern "C" void factory_wifi_init(void)
     ret = ensure_event_loop_ready();
     if (ret != ESP_OK) {
         set_init_failed("esp_event_loop_create_default failed for WiFi backend.");
+        return;
+    }
+
+    ret = t5_board_c6_bootstrap();
+    if (ret != ESP_OK) {
+        set_init_failed("Failed to bootstrap esp_hosted link on the onboard ESP32-C6.");
         return;
     }
 

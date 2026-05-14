@@ -22,8 +22,8 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#include "bsp/esp-bsp.h"
 #include "board_config.h"
-#include "factory_display.h"
 
 namespace {
 
@@ -37,21 +37,13 @@ constexpr uint32_t kDsiLaneBitrateMbps = 1000;
 constexpr uint8_t kDpiFramebuffers = 2;
 constexpr uint8_t kDsiPhyLdoChannel = 3;
 constexpr uint16_t kDsiPhyLdoVoltageMv = 2500;
-constexpr uint8_t kPca9535Addr = 0x20;
-constexpr uint8_t kPcaInputPort0Reg = 0x00;
-constexpr uint8_t kPcaOutputPort0Reg = 0x02;
-constexpr uint8_t kPcaConfigPort0Reg = 0x06;
 constexpr int kI2cTimeoutMs = 100;
-constexpr TickType_t kHdmiEnableDelay = pdMS_TO_TICKS(10);
-constexpr TickType_t kHdmiResetLowDelay = pdMS_TO_TICKS(50);
-constexpr TickType_t kHdmiPowerStableDelay = pdMS_TO_TICKS(120);
 constexpr TickType_t kHdmiReadyRetryDelay = pdMS_TO_TICKS(100);
 constexpr int kHdmiReadyRetryCount = 10;
 constexpr TickType_t kFlushTimeout = pdMS_TO_TICKS(1000);
 constexpr TickType_t kStopWaitDelay = pdMS_TO_TICKS(20);
 constexpr int kStopWaitLoops = 100;
 
-static i2c_master_dev_handle_t s_pca_dev = nullptr;
 static esp_lcd_dsi_bus_handle_t s_dsi_bus = nullptr;
 static esp_lcd_panel_io_handle_t s_io_main = nullptr;
 static esp_lcd_panel_io_handle_t s_io_cec = nullptr;
@@ -110,6 +102,14 @@ static void set_error(const char *context, esp_err_t err)
     ESP_LOGE(TAG, "%s", s_last_error);
 }
 
+static i2c_master_bus_handle_t shared_i2c_bus()
+{
+    if (bsp_i2c_init() != ESP_OK) {
+        return nullptr;
+    }
+    return bsp_i2c_get_handle();
+}
+
 static esp_err_t ensure_hdmi_int_gpio()
 {
     if (s_hdmi_int_gpio_configured) {
@@ -127,72 +127,9 @@ static esp_err_t ensure_hdmi_int_gpio()
     return ESP_OK;
 }
 
-static esp_err_t ensure_pca_device()
-{
-    if (s_pca_dev != nullptr) {
-        return ESP_OK;
-    }
-
-    i2c_master_bus_handle_t bus = factory_display_get_i2c_bus();
-    ESP_RETURN_ON_FALSE(bus != nullptr, ESP_ERR_INVALID_STATE, TAG, "Shared I2C bus unavailable");
-
-    i2c_device_config_t dev_cfg = {};
-    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address = kPca9535Addr;
-    dev_cfg.scl_speed_hz = FACTORY_I2C_FREQ_HZ;
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &dev_cfg, &s_pca_dev), TAG, "Add PCA9535 failed");
-    return ESP_OK;
-}
-
-static esp_err_t pca_read(uint8_t start_reg, uint8_t *data, size_t size)
-{
-    ESP_RETURN_ON_ERROR(ensure_pca_device(), TAG, "PCA9535 device unavailable");
-    return i2c_master_transmit_receive(s_pca_dev, &start_reg, 1, data, size, kI2cTimeoutMs);
-}
-
-static esp_err_t pca_write(uint8_t start_reg, const uint8_t *data, size_t size)
-{
-    uint8_t buffer[3] = {};
-
-    if (data == nullptr || size == 0 || size > 2) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_RETURN_ON_ERROR(ensure_pca_device(), TAG, "PCA9535 device unavailable");
-    buffer[0] = start_reg;
-    memcpy(&buffer[1], data, size);
-    return i2c_master_transmit(s_pca_dev, buffer, size + 1, kI2cTimeoutMs);
-}
-
-static esp_err_t pca_set_pin(uint8_t pin, bool high)
-{
-    if (pin >= 16) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    uint8_t outputs[2] = {};
-    uint8_t configs[2] = {};
-    const uint8_t port = pin / 8;
-    const uint8_t bit = (uint8_t)(1U << (pin % 8));
-
-    ESP_RETURN_ON_ERROR(pca_read(kPcaOutputPort0Reg, outputs, sizeof(outputs)), TAG, "Read PCA outputs failed");
-    ESP_RETURN_ON_ERROR(pca_read(kPcaConfigPort0Reg, configs, sizeof(configs)), TAG, "Read PCA directions failed");
-
-    if (high) {
-        outputs[port] |= bit;
-    } else {
-        outputs[port] &= (uint8_t)~bit;
-    }
-    configs[port] &= (uint8_t)~bit;
-
-    ESP_RETURN_ON_ERROR(pca_write(kPcaOutputPort0Reg, outputs, sizeof(outputs)), TAG, "Write PCA outputs failed");
-    ESP_RETURN_ON_ERROR(pca_write(kPcaConfigPort0Reg, configs, sizeof(configs)), TAG, "Write PCA directions failed");
-    return ESP_OK;
-}
-
 static void log_i2c_probe(const char *name, uint8_t address)
 {
-    i2c_master_bus_handle_t bus = factory_display_get_i2c_bus();
+    i2c_master_bus_handle_t bus = shared_i2c_bus();
     if (bus == nullptr) {
         return;
     }
@@ -212,14 +149,7 @@ static esp_err_t hdmi_power_on()
     }
 
     ESP_RETURN_ON_ERROR(ensure_hdmi_int_gpio(), TAG, "HDMI INT GPIO init failed");
-    ESP_RETURN_ON_ERROR(pca_set_pin(FACTORY_PCA_1V8_EN, true), TAG, "Enable HDMI 1V8 failed");
-    vTaskDelay(kHdmiEnableDelay);
-    ESP_RETURN_ON_ERROR(pca_set_pin(FACTORY_PCA_HDMI_EN, true), TAG, "Enable HDMI bridge failed");
-    vTaskDelay(kHdmiEnableDelay);
-    ESP_RETURN_ON_ERROR(pca_set_pin(FACTORY_PCA_HDMI_RST, false), TAG, "Assert HDMI reset failed");
-    vTaskDelay(kHdmiResetLowDelay);
-    ESP_RETURN_ON_ERROR(pca_set_pin(FACTORY_PCA_HDMI_RST, true), TAG, "Release HDMI reset failed");
-    vTaskDelay(kHdmiPowerStableDelay);
+    ESP_RETURN_ON_ERROR(t5_board_hdmi_power_on(), TAG, "HDMI power sequence failed");
 
     s_state.powered = true;
     log_i2c_probe("LT8912B main", FACTORY_HDMI_I2C_ADDR_LT8912B_MAIN);
@@ -230,19 +160,13 @@ static esp_err_t hdmi_power_on()
 
 static void hdmi_power_off()
 {
-    if (s_pca_dev == nullptr && !s_state.powered) {
+    if (!s_state.powered) {
         s_state.powered = false;
         return;
     }
 
-    if (pca_set_pin(FACTORY_PCA_HDMI_RST, false) != ESP_OK) {
-        ESP_LOGW(TAG, "Assert HDMI reset during power off failed");
-    }
-    if (pca_set_pin(FACTORY_PCA_HDMI_EN, false) != ESP_OK) {
-        ESP_LOGW(TAG, "Disable HDMI bridge failed");
-    }
-    if (pca_set_pin(FACTORY_PCA_1V8_EN, false) != ESP_OK) {
-        ESP_LOGW(TAG, "Disable HDMI 1V8 failed");
+    if (t5_board_hdmi_power_off() != ESP_OK) {
+        ESP_LOGW(TAG, "HDMI power off failed");
     }
     s_state.powered = false;
     s_state.ready = false;
@@ -336,7 +260,7 @@ static esp_err_t init_panel()
     io_config.lcd_param_bits = 8;
     io_config.flags.disable_control_phase = 1;
     io_config.scl_speed_hz = FACTORY_I2C_FREQ_HZ;
-    ret = esp_lcd_new_panel_io_i2c(factory_display_get_i2c_bus(), &io_config, &s_io_main);
+    ret = esp_lcd_new_panel_io_i2c(shared_i2c_bus(), &io_config, &s_io_main);
     if (ret != ESP_OK) {
         set_error("Create LT8912B main IO", ret);
         delete_panel_handles();
@@ -346,7 +270,7 @@ static esp_err_t init_panel()
 
     esp_lcd_panel_io_i2c_config_t io_cec_config = io_config;
     io_cec_config.dev_addr = LT8912B_IO_I2C_CEC_ADDRESS;
-    ret = esp_lcd_new_panel_io_i2c(factory_display_get_i2c_bus(), &io_cec_config, &s_io_cec);
+    ret = esp_lcd_new_panel_io_i2c(shared_i2c_bus(), &io_cec_config, &s_io_cec);
     if (ret != ESP_OK) {
         set_error("Create LT8912B CEC IO", ret);
         delete_panel_handles();
@@ -356,7 +280,7 @@ static esp_err_t init_panel()
 
     esp_lcd_panel_io_i2c_config_t io_avi_config = io_config;
     io_avi_config.dev_addr = LT8912B_IO_I2C_AVI_ADDRESS;
-    ret = esp_lcd_new_panel_io_i2c(factory_display_get_i2c_bus(), &io_avi_config, &s_io_avi);
+    ret = esp_lcd_new_panel_io_i2c(shared_i2c_bus(), &io_avi_config, &s_io_avi);
     if (ret != ESP_OK) {
         set_error("Create LT8912B AVI IO", ret);
         delete_panel_handles();
@@ -733,10 +657,6 @@ extern "C" bool factory_hdmi_init(void)
 extern "C" void factory_hdmi_deinit(void)
 {
     factory_hdmi_stop();
-    if (s_pca_dev != nullptr) {
-        i2c_master_bus_rm_device(s_pca_dev);
-        s_pca_dev = nullptr;
-    }
 }
 
 extern "C" bool factory_hdmi_start(factory_hdmi_mode_t mode)
