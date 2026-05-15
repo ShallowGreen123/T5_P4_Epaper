@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "factory_assets.h"
 #include "factory_hdmi.h"
 #include "lvgl.h"
 #include "ui_theme.h"
@@ -135,7 +136,7 @@ static void action_btn_event_cb(lv_event_t *e)
 static lv_obj_t *create_metric_label(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *label = factory_ui_create_info_label(parent, text);
-    lv_obj_set_style_text_font(label, LV_FONT_DEFAULT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, FACTORY_FONT_TITLE, LV_PART_MAIN);
     return label;
 }
 

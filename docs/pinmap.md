@@ -159,7 +159,7 @@ I2C 地址：`0x20`，中断输出 `PCA_INT -> GPIO5`。
 | ES8311        | `0x18`          | 原理图 Page 6 | 音频 codec    |
 | PCA9535       | `0x20`          | 原理图 Page 4 | EPD/TPS 扩展  |
 | XL9555        | `0x22`          | 原理图 Page 8 | 新增通用 IO 扩展  |
-| H722/H769 传感器 | `0x29` / `0x69` | 原理图 Page 8 | 需要按短接点选择    |
+| ICM20948 传感器 | `0x29` / `0x69` | 原理图 Page 8 | 需要按短接点选择    |
 | SGM38121      | `0x28`          | 原理图 Page 2 | 摄像头供电相关     |
 | LT8912B       | `0x48`          | 原理图 Page 7 | HDMI Bridge |
 | BQ27220       | `0x55`          | 原理图 Page 2 | Fuel gauge  |
