@@ -1,0 +1,13 @@
+menu "ICM20948 Example Configuration"
+
+config ICM20948_I2C_FREQ_HZ
+    int "I2C clock frequency (Hz)"
+    range 10000 400000
+    default 400000
+
+config ICM20948_SAMPLE_PERIOD_MS
+    int "Serial output period (ms)"
+    range 20 60000
+    default 200
+
+endmenu

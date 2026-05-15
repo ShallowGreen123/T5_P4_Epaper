@@ -45,3 +45,6 @@ i2c-tools> i2cdetect
 - If you never see the `i2c-tools>` prompt, check the selected console interface and your serial monitor settings.
 - If `i2cdetect` shows no devices, reconfigure the bus pins with `i2cconfig` and verify pull-ups and wiring.
 - If register reads fail, double-check device address width and whether the target chip expects 8-bit or 16-bit register addresses.
+
+
+i2cconfig  --port=0 --freq=10000 --sda=7 --scl=8
