@@ -239,6 +239,7 @@ V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复�
 #define BOARD_C6_D3                   (17)
 #define BOARD_C6_CLK                  (18)
 #define BOARD_C6_CMD                  (19)
+#define BOARD_C6_RST                  (54)
 
 // ES8311 audio
 #define BOARD_ES8311_I2S_DOUT         (39) // ESP32 -> ES8311 DSDIN

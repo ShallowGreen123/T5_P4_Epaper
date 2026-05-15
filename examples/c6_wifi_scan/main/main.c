@@ -19,7 +19,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
-#include "t5_p4_board.h"
 
 static const char *TAG = "c6_wifi_scan";
 static const TickType_t SCAN_INTERVAL_TICKS = pdMS_TO_TICKS(5000);
@@ -125,9 +124,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_LOGI(TAG, "ESP32-P4 hosted WiFi scan example");
-    ESP_LOGI(TAG, "Expect hosted SDIO logs for CLK[18] CMD[19] D0[14] D1[15] D2[16] D3[17] Slave_Reset[%d]",
-             (int)t5_board_c6_host_reset_gpio());
-    ESP_ERROR_CHECK(t5_board_c6_bootstrap());
+    ESP_LOGI(TAG, "Expect hosted SDIO logs for CLK[18] CMD[19] D0[14] D1[15] D2[16] D3[17] Slave_Reset[54]");
 
     wifi_init_sta();
 

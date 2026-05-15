@@ -1,8 +1,9 @@
-idf_component_register(SRCS "main.c"
-                       INCLUDE_DIRS "."
-                       REQUIRES
-                           esp_event
-                           esp_netif
-                           esp_wifi
-                           nvs_flash
-                           t5_p4_board)
+idf_component_register( SRCS "main.c"
+                        INCLUDE_DIRS "."
+                        REQUIRES
+                            esp_event
+                            esp_hosted
+                            esp_netif
+                            esp_wifi
+                            nvs_flash
+                            t5_p4_board)

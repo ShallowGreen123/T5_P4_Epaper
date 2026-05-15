@@ -52,7 +52,7 @@ extern "C" {
 #define T5_BOARD_C6_SDIO_D3              GPIO_NUM_17
 #define T5_BOARD_C6_SDIO_CLK             GPIO_NUM_18
 #define T5_BOARD_C6_SDIO_CMD             GPIO_NUM_19
-#define T5_BOARD_C6_HOST_RESET_GPIO      GPIO_NUM_22
+#define T5_BOARD_C6_HOST_RESET_GPIO      GPIO_NUM_54
 
 #define T5_BOARD_I2C_ADDR_ES8311         (0x18)
 #define T5_BOARD_I2C_ADDR_PCA9535        (0x20)
