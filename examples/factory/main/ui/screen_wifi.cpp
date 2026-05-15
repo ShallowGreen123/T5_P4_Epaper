@@ -18,6 +18,8 @@ static lv_obj_t *s_summary_label = nullptr;
 static lv_obj_t *s_scan_list = nullptr;
 static lv_obj_t *s_scan_btn = nullptr;
 static lv_obj_t *s_scan_btn_label = nullptr;
+static lv_obj_t *s_disconnect_btn = nullptr;
+static lv_obj_t *s_disconnect_btn_label = nullptr;
 static lv_obj_t *s_password_overlay = nullptr;
 static lv_obj_t *s_password_card = nullptr;
 static lv_obj_t *s_password_title = nullptr;
@@ -76,6 +78,22 @@ static void refresh_scan_button()
         if (!should_disable && is_disabled) {
             lv_obj_clear_state(s_scan_btn, LV_STATE_DISABLED);
         }
+    }
+
+    if (s_disconnect_btn == nullptr || s_disconnect_btn_label == nullptr) {
+        return;
+    }
+
+    set_text_if_changed(s_disconnect_btn_label, "Disconnect");
+
+    const bool disconnect_should_disable =
+        factory_wifi_scan_busy() || password_prompt_visible() || !factory_wifi_can_disconnect();
+    const bool disconnect_is_disabled = lv_obj_has_state(s_disconnect_btn, LV_STATE_DISABLED);
+
+    if (disconnect_should_disable && !disconnect_is_disabled) {
+        lv_obj_add_state(s_disconnect_btn, LV_STATE_DISABLED);
+    } else if (!disconnect_should_disable && disconnect_is_disabled) {
+        lv_obj_clear_state(s_disconnect_btn, LV_STATE_DISABLED);
     }
 }
 
@@ -328,6 +346,16 @@ static void scan_btn_event_cb(lv_event_t *e)
     refresh_wifi_ui();
 }
 
+static void disconnect_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || password_prompt_visible()) {
+        return;
+    }
+
+    factory_wifi_disconnect();
+    refresh_wifi_ui();
+}
+
 static void create_password_prompt(lv_obj_t *parent)
 {
     s_password_overlay = lv_obj_create(parent);
@@ -450,11 +478,15 @@ static void create_wifi(lv_obj_t *parent)
     lv_obj_set_style_shadow_width(btn_row, 0, LV_PART_MAIN);
     lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     s_scan_btn = factory_ui_create_action_button(btn_row, "Scan WiFi", scan_btn_event_cb, nullptr);
-    lv_obj_set_width(s_scan_btn, lv_pct(42));
+    lv_obj_set_width(s_scan_btn, lv_pct(48));
     s_scan_btn_label = lv_obj_get_child(s_scan_btn, 0);
+
+    s_disconnect_btn = factory_ui_create_action_button(btn_row, "Disconnect", disconnect_btn_event_cb, nullptr);
+    lv_obj_set_width(s_disconnect_btn, lv_pct(48));
+    s_disconnect_btn_label = lv_obj_get_child(s_disconnect_btn, 0);
 
     create_password_prompt(parent);
     refresh_wifi_ui();
@@ -486,6 +518,8 @@ static void destroy_wifi(void)
     s_scan_list = nullptr;
     s_scan_btn = nullptr;
     s_scan_btn_label = nullptr;
+    s_disconnect_btn = nullptr;
+    s_disconnect_btn_label = nullptr;
     s_password_overlay = nullptr;
     s_password_card = nullptr;
     s_password_title = nullptr;

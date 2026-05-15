@@ -230,7 +230,7 @@ V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复�
 #define BOARD_EPD_LEH                 (26)
 #define BOARD_EPD_STV                 (48)
 #define BOARD_FRONTLIGHT_LED1_PWM     (53)
-#define BOARD_FRONTLIGHT_LED2_PWM     (54)
+#define BOARD_FRONTLIGHT_LED2_PWM     (-1)
 
 // ESP32-C6 SDIO
 #define BOARD_C6_D0                   (14)

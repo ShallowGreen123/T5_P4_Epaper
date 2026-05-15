@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "esp_event.h"
+#include "esp_hosted.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -40,6 +41,7 @@ bool s_wifi_scan_busy = false;
 bool s_wifi_connecting = false;
 bool s_wifi_connected = false;
 bool s_wifi_ignore_disconnect_once = false;
+bool s_wifi_disconnect_requested = false;
 FactoryWifiState s_wifi_state = FACTORY_WIFI_STATE_IDLE;
 int s_wifi_scan_count = 0;
 int s_wifi_scan_total_count = 0;
@@ -66,6 +68,7 @@ bool selected_network_is_open(void);
 bool has_cached_password_for_selected(void);
 bool selected_network_requires_password(void);
 bool start_connection_for_selected_item(const char *password);
+void update_password_label_for_selected();
 
 void copy_text(char *dst, size_t dst_size, const char *src)
 {
@@ -171,6 +174,22 @@ bool selected_network_requires_password(void)
     }
 
     return !selected_network_is_open() && !has_cached_password_for_selected();
+}
+
+void update_password_label_for_selected()
+{
+    if (s_wifi_selected_index < 0 || s_wifi_selected_index >= s_wifi_scan_count) {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+        return;
+    }
+
+    if (s_wifi_hidden[s_wifi_selected_index] || selected_network_is_open()) {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
+    } else if (has_cached_password_for_selected()) {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "(cached)");
+    } else {
+        copy_text(s_wifi_password, sizeof(s_wifi_password), "(required)");
+    }
 }
 
 void refresh_summary()
@@ -302,10 +321,33 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id
         s_wifi_connecting = false;
         s_wifi_connected = false;
         copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
-        set_state(FACTORY_WIFI_STATE_ERROR, "WiFi disconnected");
-        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
         s_wifi_connected_ssid[0] = '\0';
         s_wifi_pending_password[0] = '\0';
+
+        if (s_wifi_disconnect_requested) {
+            s_wifi_disconnect_requested = false;
+            if (s_wifi_selected_index >= 0) {
+                copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(s_wifi_selected_index));
+            } else {
+                copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), "Not selected");
+            }
+            update_password_label_for_selected();
+            set_state(FACTORY_WIFI_STATE_READY, "WiFi disconnected");
+            if (s_wifi_selected_index >= 0) {
+                snprintf(
+                    s_wifi_connection_note,
+                    sizeof(s_wifi_connection_note),
+                    "Disconnected from %s.",
+                    get_display_ssid(s_wifi_selected_index));
+            } else {
+                copy_text(s_wifi_connection_note, sizeof(s_wifi_connection_note), "WiFi disconnected.");
+            }
+            refresh_summary();
+            return;
+        }
+
+        set_state(FACTORY_WIFI_STATE_ERROR, "WiFi disconnected");
+        update_password_label_for_selected();
 
         if (s_wifi_selected_index >= 0) {
             snprintf(
@@ -395,11 +437,12 @@ bool start_connection_for_selected_item(const char *password)
             sizeof(s_wifi_connection_note),
             "%s requires a password before connecting.",
             get_display_ssid(s_wifi_selected_index));
-        copy_text(s_wifi_password, sizeof(s_wifi_password), "(required)");
+        update_password_label_for_selected();
         refresh_summary();
         return false;
     }
 
+    s_wifi_disconnect_requested = false;
     wifi_config_t wifi_cfg = {};
     snprintf((char *)wifi_cfg.sta.ssid, sizeof(wifi_cfg.sta.ssid), "%s", s_wifi_ssids[s_wifi_selected_index]);
     snprintf((char *)wifi_cfg.sta.password, sizeof(wifi_cfg.sta.password), "%s", open_network ? "" : connect_password);
@@ -598,6 +641,7 @@ void set_init_failed(const char *reason)
     s_wifi_scan_started = false;
     s_wifi_connecting = false;
     s_wifi_connected = false;
+    s_wifi_disconnect_requested = false;
     clear_items();
     set_state(FACTORY_WIFI_STATE_ERROR, "WiFi unavailable");
     copy_text(s_wifi_connection_note, sizeof(s_wifi_connection_note), reason);
@@ -617,6 +661,7 @@ void set_ready_state()
     s_wifi_scan_started = false;
     s_wifi_connecting = false;
     s_wifi_connected = false;
+    s_wifi_disconnect_requested = false;
     clear_items();
     set_state(FACTORY_WIFI_STATE_READY, "WiFi ready");
     s_wifi_connection_note[0] = '\0';
@@ -651,9 +696,9 @@ extern "C" void factory_wifi_init(void)
         return;
     }
 
-    ret = t5_board_c6_bootstrap();
+    ret = static_cast<esp_err_t>(esp_hosted_init());
     if (ret != ESP_OK) {
-        set_init_failed("Failed to bootstrap esp_hosted link on the onboard ESP32-C6.");
+        set_init_failed("esp_hosted_init failed for WiFi backend.");
         return;
     }
 
@@ -776,6 +821,69 @@ extern "C" bool factory_wifi_connect_selected_with_password(const char *password
     return start_connection_for_selected_item(password);
 }
 
+extern "C" bool factory_wifi_can_disconnect(void)
+{
+    return s_wifi_available && (s_wifi_connected || s_wifi_connecting);
+}
+
+extern "C" bool factory_wifi_disconnect(void)
+{
+    if (!factory_wifi_can_disconnect()) {
+        refresh_summary();
+        return false;
+    }
+
+    s_wifi_ignore_disconnect_once = false;
+    s_wifi_disconnect_requested = true;
+    copy_text(s_wifi_ip, sizeof(s_wifi_ip), "Not available");
+    set_state(FACTORY_WIFI_STATE_READY, "Disconnecting WiFi...");
+
+    if (s_wifi_selected_index >= 0) {
+        snprintf(
+            s_wifi_connection_note,
+            sizeof(s_wifi_connection_note),
+            "Disconnecting from %s...",
+            get_display_ssid(s_wifi_selected_index));
+    } else {
+        copy_text(s_wifi_connection_note, sizeof(s_wifi_connection_note), "Disconnecting WiFi...");
+    }
+    refresh_summary();
+
+    esp_err_t ret = esp_wifi_disconnect();
+    if (ret == ESP_OK) {
+        return true;
+    }
+
+    if (ret == ESP_ERR_WIFI_NOT_CONNECT || ret == ESP_ERR_WIFI_CONN) {
+        s_wifi_disconnect_requested = false;
+        s_wifi_connecting = false;
+        s_wifi_connected = false;
+        set_state(FACTORY_WIFI_STATE_READY, "WiFi disconnected");
+        update_password_label_for_selected();
+        if (s_wifi_selected_index >= 0) {
+            snprintf(
+                s_wifi_connection_note,
+                sizeof(s_wifi_connection_note),
+                "Disconnected from %s.",
+                get_display_ssid(s_wifi_selected_index));
+        } else {
+            copy_text(s_wifi_connection_note, sizeof(s_wifi_connection_note), "WiFi disconnected.");
+        }
+        refresh_summary();
+        return true;
+    }
+
+    s_wifi_disconnect_requested = false;
+    set_state(FACTORY_WIFI_STATE_ERROR, "WiFi disconnect failed");
+    snprintf(
+        s_wifi_connection_note,
+        sizeof(s_wifi_connection_note),
+        "Failed to disconnect WiFi: %s",
+        esp_err_to_name(ret));
+    refresh_summary();
+    return false;
+}
+
 extern "C" const char *factory_wifi_get_state_text(void)
 {
     return s_wifi_state_text;
@@ -813,13 +921,7 @@ extern "C" void factory_wifi_select_item(int index)
     s_wifi_selected_index = index;
     s_wifi_connection_note[0] = '\0';
     copy_text(s_wifi_ssid, sizeof(s_wifi_ssid), get_display_ssid(index));
-    if (s_wifi_hidden[index] || selected_network_is_open()) {
-        copy_text(s_wifi_password, sizeof(s_wifi_password), "-");
-    } else if (has_cached_password_for_selected()) {
-        copy_text(s_wifi_password, sizeof(s_wifi_password), "(cached)");
-    } else {
-        copy_text(s_wifi_password, sizeof(s_wifi_password), "(required)");
-    }
+    update_password_label_for_selected();
     refresh_summary();
 }
 

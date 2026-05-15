@@ -16,6 +16,8 @@ bool factory_wifi_has_scan_started(void);
 bool factory_wifi_selected_requires_password(void);
 bool factory_wifi_connect_selected(void);
 bool factory_wifi_connect_selected_with_password(const char *password);
+bool factory_wifi_can_disconnect(void);
+bool factory_wifi_disconnect(void);
 const char *factory_wifi_get_state_text(void);
 const char *factory_wifi_get_summary(void);
 int factory_wifi_get_scan_count(void);

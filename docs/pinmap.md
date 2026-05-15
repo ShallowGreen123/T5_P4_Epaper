@@ -189,6 +189,6 @@ I2C 地址：`0x20`，中断输出 `PCA_INT -> GPIO5`。
 
 - 本仓库里仍能看到旧版假设：例如 `GPIO6 = C6_WAKEUP`、`GPIO54 = C6_RST`、`PCA9535` 控 `HDMI_RST/SHUTDOWN` 等。
 
-- V0.2 新硬件应以本文为准：`GPIO6 = ALL_INT`，`C6_RST/EN = XL9555 P13`，`C6_WAKEUP = XL9555 P14`，`SHUTDOWN/AUDIO_SEL/HDMI_RST/HDMI_EN` 也都在 `XL9555` 上。
+- V0.2 新硬件应以本文为准：`GPIO6 = ALL_INT`，`C6_RST/EN = GPIO54`，`C6_WAKEUP = XL9555 P14`，`SHUTDOWN/AUDIO_SEL/HDMI_RST/HDMI_EN` 也都在 `XL9555` 上。
 
 - 如果后续要统一代码里的板级宏，建议按 `V0.2` 新建一套独立 board config，而不是继续在旧 `PCA9535` 宏名上叠补丁。

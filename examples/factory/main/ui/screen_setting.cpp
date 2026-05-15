@@ -20,7 +20,6 @@ struct BacklightControl {
 
 static BacklightControl s_backlight_controls[] = {
     {.index = 1, .title = "Screen Backlight 1", .pin_name = "IO11", .card = nullptr, .state_label = nullptr, .sw = nullptr},
-    {.index = 2, .title = "Screen Backlight 2", .pin_name = "IO12", .card = nullptr, .state_label = nullptr, .sw = nullptr},
 };
 
 static void sync_backlight_controls();

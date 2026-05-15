@@ -46,16 +46,33 @@ static constexpr gpio_num_t kBacklightGpios[] = {
 static bool s_backlight_gpio_ready = false;
 static bool s_backlight_enabled[sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0])] = {};
 
+static bool backlight_gpio_is_valid(gpio_num_t gpio)
+{
+    return gpio >= 0 && gpio < GPIO_NUM_MAX;
+}
+
 static bool ensure_backlight_gpio_ready()
 {
     if (s_backlight_gpio_ready) {
         return true;
     }
 
+    uint64_t pin_mask = 0;
+    for (size_t i = 0; i < sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0]); ++i) {
+        if (backlight_gpio_is_valid(kBacklightGpios[i])) {
+            pin_mask |= 1ULL << kBacklightGpios[i];
+        }
+    }
+
+    if (pin_mask == 0) {
+        s_backlight_gpio_ready = true;
+        return true;
+    }
+
     gpio_config_t config = {};
     config.intr_type = GPIO_INTR_DISABLE;
     config.mode = GPIO_MODE_OUTPUT;
-    config.pin_bit_mask = (1ULL << FACTORY_BACKLIGHT_IO11_GPIO) | (1ULL << FACTORY_BACKLIGHT_IO12_GPIO);
+    config.pin_bit_mask = pin_mask;
     config.pull_down_en = GPIO_PULLDOWN_DISABLE;
     config.pull_up_en = GPIO_PULLUP_DISABLE;
 
@@ -66,7 +83,9 @@ static bool ensure_backlight_gpio_ready()
     }
 
     for (size_t i = 0; i < sizeof(kBacklightGpios) / sizeof(kBacklightGpios[0]); ++i) {
-        gpio_set_level(kBacklightGpios[i], 0);
+        if (backlight_gpio_is_valid(kBacklightGpios[i])) {
+            gpio_set_level(kBacklightGpios[i], 0);
+        }
         s_backlight_enabled[i] = false;
     }
 
@@ -128,7 +147,7 @@ extern "C" const factory_page_info_t *factory_port_get_page_info(factory_page_id
 extern "C" bool factory_port_get_backlight_enabled(uint8_t index)
 {
     const int offset = backlight_index_to_offset(index);
-    if (offset < 0 || !ensure_backlight_gpio_ready()) {
+    if (offset < 0 || !ensure_backlight_gpio_ready() || !backlight_gpio_is_valid(kBacklightGpios[offset])) {
         return false;
     }
     return s_backlight_enabled[offset];
@@ -137,7 +156,7 @@ extern "C" bool factory_port_get_backlight_enabled(uint8_t index)
 extern "C" void factory_port_set_backlight_enabled(uint8_t index, bool enabled)
 {
     const int offset = backlight_index_to_offset(index);
-    if (offset < 0 || !ensure_backlight_gpio_ready()) {
+    if (offset < 0 || !ensure_backlight_gpio_ready() || !backlight_gpio_is_valid(kBacklightGpios[offset])) {
         return;
     }
 

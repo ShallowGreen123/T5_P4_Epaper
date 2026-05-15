@@ -17,6 +17,7 @@ idf_component_register(
         esp_event
         esp_cam_sensor
         esp_driver_spi
+        esp_hosted
         esp_netif
         esp_psram
         esp_hw_support

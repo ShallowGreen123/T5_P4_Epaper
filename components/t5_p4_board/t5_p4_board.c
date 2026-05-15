@@ -954,6 +954,8 @@ esp_err_t t5_board_frontlight_init(void)
         return ESP_OK;
     }
 
+    const bool has_led2 = (T5_BOARD_FRONTLIGHT_LED2 != GPIO_NUM_NC);
+
     const ledc_timer_config_t timer_config = {
         .speed_mode = FRONTLIGHT_LEDC_MODE,
         .timer_num = FRONTLIGHT_LEDC_TIMER,
@@ -982,7 +984,9 @@ esp_err_t t5_board_frontlight_init(void)
 
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_config), TAG, "Configure frontlight LEDC timer failed");
     ESP_RETURN_ON_ERROR(ledc_channel_config(&led1_config), TAG, "Configure frontlight LED1 failed");
-    ESP_RETURN_ON_ERROR(ledc_channel_config(&led2_config), TAG, "Configure frontlight LED2 failed");
+    if (has_led2) {
+        ESP_RETURN_ON_ERROR(ledc_channel_config(&led2_config), TAG, "Configure frontlight LED2 failed");
+    }
 
     s_frontlight_initialized = true;
     s_frontlight_led1_duty = 0;
@@ -992,17 +996,21 @@ esp_err_t t5_board_frontlight_init(void)
 
 esp_err_t t5_board_frontlight_set(uint8_t led1_duty, uint8_t led2_duty)
 {
+    const bool has_led2 = (T5_BOARD_FRONTLIGHT_LED2 != GPIO_NUM_NC);
+
     ESP_RETURN_ON_ERROR(t5_board_frontlight_init(), TAG, "Frontlight init failed");
     ESP_RETURN_ON_ERROR(ledc_set_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_1, led1_duty), TAG,
                         "Set frontlight LED1 duty failed");
     ESP_RETURN_ON_ERROR(ledc_update_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_1), TAG,
                         "Update frontlight LED1 duty failed");
-    ESP_RETURN_ON_ERROR(ledc_set_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2, led2_duty), TAG,
-                        "Set frontlight LED2 duty failed");
-    ESP_RETURN_ON_ERROR(ledc_update_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2), TAG,
-                        "Update frontlight LED2 duty failed");
+    if (has_led2) {
+        ESP_RETURN_ON_ERROR(ledc_set_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2, led2_duty), TAG,
+                            "Set frontlight LED2 duty failed");
+        ESP_RETURN_ON_ERROR(ledc_update_duty(FRONTLIGHT_LEDC_MODE, FRONTLIGHT_LEDC_CHANNEL_2), TAG,
+                            "Update frontlight LED2 duty failed");
+    }
     s_frontlight_led1_duty = led1_duty;
-    s_frontlight_led2_duty = led2_duty;
+    s_frontlight_led2_duty = has_led2 ? led2_duty : 0;
     return ESP_OK;
 }
 

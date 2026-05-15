@@ -38,7 +38,7 @@ extern "C" {
 #define T5_BOARD_EPD_LEH                 GPIO_NUM_26
 #define T5_BOARD_EPD_STV                 GPIO_NUM_48
 #define T5_BOARD_FRONTLIGHT_LED1         GPIO_NUM_53
-#define T5_BOARD_FRONTLIGHT_LED2         GPIO_NUM_54
+#define T5_BOARD_FRONTLIGHT_LED2         GPIO_NUM_NC
 
 #define T5_BOARD_ES8311_MCLK             GPIO_NUM_43
 #define T5_BOARD_ES8311_BCLK             GPIO_NUM_42
