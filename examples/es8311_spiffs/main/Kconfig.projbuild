@@ -3,7 +3,7 @@ menu "Example Configuration"
     config EXAMPLE_VOICE_VOLUME
         int "Speaker volume"
         range 0 100
-        default 90
+        default 100
         help
             ES8311 output volume in percent.
 
