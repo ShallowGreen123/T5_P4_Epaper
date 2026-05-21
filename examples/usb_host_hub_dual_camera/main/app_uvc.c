@@ -31,6 +31,8 @@
 
 static const char *TAG = "uvc";
 static const char *USB_MON_TAG = "usb_mon";
+static SemaphoreHandle_t s_uvc_devices_mutex = NULL;
+static int s_next_uvc_dev_index = 0;
 
 #define USB_MONITOR_LOG_INTERVAL_MS               5000
 #define USB_MONITOR_MAX_EVENT_MSG                 5
@@ -78,6 +80,49 @@ typedef struct {
 static uvc_dev_obj_t p_uvc_dev_obj = {0};
 
 static esp_err_t uvc_open(uvc_dev_t *dev, int frame_index);
+
+static void uvc_dev_lock(void)
+{
+    if (s_uvc_devices_mutex != NULL) {
+        xSemaphoreTake(s_uvc_devices_mutex, portMAX_DELAY);
+    }
+}
+
+static void uvc_dev_unlock(void)
+{
+    if (s_uvc_devices_mutex != NULL) {
+        xSemaphoreGive(s_uvc_devices_mutex);
+    }
+}
+
+static void uvc_dev_register(uvc_dev_t *dev)
+{
+    uvc_dev_lock();
+    SLIST_INSERT_HEAD(&p_uvc_dev_obj.uvc_devices_list, dev, list_entry);
+    p_uvc_dev_obj.uvc_dev_num++;
+    uvc_dev_unlock();
+}
+
+static void uvc_dev_unregister(uvc_dev_t *dev)
+{
+    bool found = false;
+
+    uvc_dev_lock();
+    uvc_dev_t *iter = NULL;
+    SLIST_FOREACH(iter, &p_uvc_dev_obj.uvc_devices_list, list_entry) {
+        if (iter == dev) {
+            found = true;
+            break;
+        }
+    }
+    if (found) {
+        SLIST_REMOVE(&p_uvc_dev_obj.uvc_devices_list, dev, uvc_dev_s, list_entry);
+        if (p_uvc_dev_obj.uvc_dev_num > 0) {
+            p_uvc_dev_obj.uvc_dev_num--;
+        }
+    }
+    uvc_dev_unlock();
+}
 
 typedef struct {
     uint8_t bLength;
@@ -332,10 +377,11 @@ static void usb_lib_task(void *arg)
 static void uvc_task(void *arg)
 {
     uvc_dev_t *dev = (uvc_dev_t *)arg;
-    dev->event_group = xEventGroupCreate();
-    dev->frame_queue = xQueueCreate(2, sizeof(uvc_host_frame_t *));
-    SLIST_INSERT_HEAD(&p_uvc_dev_obj.uvc_devices_list, dev, list_entry);
-    p_uvc_dev_obj.uvc_dev_num++;
+    if (dev == NULL) {
+        ESP_LOGE(TAG, "uvc_task started with NULL device");
+        vTaskDelete(NULL);
+        return;
+    }
 
     bool exit = false;
     while (!exit) {
@@ -391,9 +437,13 @@ static void uvc_task(void *arg)
     if (dev->if_streaming) {
         uvc_host_stream_close(dev->stream);
     }
-    vQueueDelete(dev->frame_queue);
-    SLIST_REMOVE(&p_uvc_dev_obj.uvc_devices_list, dev, uvc_dev_s, list_entry);
-    p_uvc_dev_obj.uvc_dev_num--;
+    if (dev->frame_queue != NULL) {
+        vQueueDelete(dev->frame_queue);
+    }
+    if (dev->event_group != NULL) {
+        vEventGroupDelete(dev->event_group);
+    }
+    uvc_dev_unregister(dev);
     free(dev);
 
     // Create a task to open the device
@@ -412,7 +462,9 @@ void driver_event_cb(const uvc_host_driver_event_data_t *event, void *user_ctx)
         dev = (uvc_dev_t *)calloc(1, sizeof(uvc_dev_t) + (event->device_connected.frame_info_num) * sizeof(uvc_host_frame_info_t));
         assert(dev != NULL);
 
-        dev->index = p_uvc_dev_obj.uvc_dev_num;
+        uvc_dev_lock();
+        dev->index = s_next_uvc_dev_index++;
+        uvc_dev_unlock();
         dev->dev_addr = event->device_connected.dev_addr;
         dev->uvc_stream_index = event->device_connected.uvc_stream_index;
         dev->frame_info_num = event->device_connected.frame_info_num;
@@ -441,13 +493,36 @@ void driver_event_cb(const uvc_host_driver_event_data_t *event, void *user_ctx)
             dev = NULL;
             return;
         }
+
+        dev->event_group = xEventGroupCreate();
+        dev->frame_queue = xQueueCreate(2, sizeof(uvc_host_frame_t *));
+        if (dev->event_group == NULL || dev->frame_queue == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate runtime objects for cam[%d]", dev->index);
+            if (dev->frame_queue != NULL) {
+                vQueueDelete(dev->frame_queue);
+            }
+            if (dev->event_group != NULL) {
+                vEventGroupDelete(dev->event_group);
+            }
+            free(dev);
+            return;
+        }
+
+        uvc_dev_register(dev);
         break;
     }
     default:
-        break;
+        ESP_LOGW(TAG, "Ignore unsupported UVC driver event type: %d", event->type);
+        return;
     }
 
-    xTaskCreate(uvc_task, "uvc_task", 4096, dev, 5, NULL);
+    if (xTaskCreate(uvc_task, "uvc_task", 4096, dev, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create uvc_task for cam[%d]", dev->index);
+        uvc_dev_unregister(dev);
+        vQueueDelete(dev->frame_queue);
+        vEventGroupDelete(dev->event_group);
+        free(dev);
+    }
 }
 
 void stream_callback(const uvc_host_stream_event_data_t *event, void *user_ctx)
@@ -544,6 +619,9 @@ static esp_err_t uvc_open(uvc_dev_t *dev, int frame_index)
 
 esp_err_t app_uvc_init(void)
 {
+    s_uvc_devices_mutex = xSemaphoreCreateMutex();
+    assert(s_uvc_devices_mutex != NULL);
+
     BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), 15, NULL);
     assert(task_created == pdPASS);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -566,12 +644,14 @@ esp_err_t app_uvc_init(void)
 esp_err_t app_uvc_control_dev_by_index(int index, bool if_open, int resolution_index)
 {
     uvc_dev_t *dev;
+    uvc_dev_lock();
     SLIST_FOREACH(dev, &p_uvc_dev_obj.uvc_devices_list, list_entry) {
         if (dev->index == index) {
             ESP_LOGI(TAG, "find uvc device");
             goto find_dev;
         }
     }
+    uvc_dev_unlock();
 
     return ESP_ERR_NOT_FOUND;
 
@@ -582,6 +662,7 @@ find_dev:
     } else {
         xEventGroupSetBits(dev->event_group, EVENT_STOP);
     }
+    uvc_dev_unlock();
 
     return ESP_OK;
 }
@@ -592,6 +673,7 @@ esp_err_t app_uvc_get_dev_frame_info(int index, uvc_dev_info_t *dev_info)
 
     uvc_dev_t *dev;
     int i = 0;
+    uvc_dev_lock();
     SLIST_FOREACH(dev, &p_uvc_dev_obj.uvc_devices_list, list_entry) {
         if (i == index) {
             goto find_dev;
@@ -599,20 +681,21 @@ esp_err_t app_uvc_get_dev_frame_info(int index, uvc_dev_info_t *dev_info)
             i++;
         }
     }
+    uvc_dev_unlock();
 
     return ESP_ERR_NOT_FOUND;
 
 find_dev:
     dev_info->index  = dev->index;
     dev_info->if_streaming = dev->if_streaming;
-    dev_info->resolution_count = dev->frame_info_num;
+    dev_info->resolution_count = dev->frame_info_num > MAX_RESOLUTION ? MAX_RESOLUTION : dev->frame_info_num;
     dev_info->active_resolution = dev->active_frame_index;
-    assert(dev_info->resolution_count <= MAX_RESOLUTION);
 
-    for (int i = 0; i < dev->frame_info_num; i++) {
+    for (int i = 0; i < dev_info->resolution_count; i++) {
         dev_info->resolution[i].width = dev->frame_info[i].h_res;
         dev_info->resolution[i].height = dev->frame_info[i].v_res;
     }
+    uvc_dev_unlock();
 
     return ESP_OK;
 }
@@ -620,7 +703,9 @@ find_dev:
 esp_err_t app_uvc_get_connect_dev_num(int *num)
 {
     ESP_RETURN_ON_FALSE(num != NULL, ESP_ERR_INVALID_ARG, TAG, "Invalid pointer");
+    uvc_dev_lock();
     *num = p_uvc_dev_obj.uvc_dev_num;
+    uvc_dev_unlock();
     return ESP_OK;
 }
 

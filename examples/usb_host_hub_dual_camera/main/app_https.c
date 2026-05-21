@@ -5,6 +5,8 @@
  */
 
 #include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
@@ -31,6 +33,41 @@ typedef struct {
 } camera_system_t;
 
 static camera_system_t camera_system = {0};
+
+static esp_err_t send_json_chunkf(httpd_req_t *req, const char *fmt, ...)
+{
+    esp_err_t err = ESP_OK;
+    va_list args;
+    va_start(args, fmt);
+    va_list args_copy;
+    va_copy(args_copy, args);
+
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        va_end(args_copy);
+        return ESP_FAIL;
+    }
+
+    char stack_buf[128];
+    char *buf = stack_buf;
+    if (needed >= (int)sizeof(stack_buf)) {
+        buf = malloc((size_t)needed + 1);
+        if (buf == NULL) {
+            va_end(args_copy);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    vsnprintf(buf, (size_t)needed + 1, fmt, args_copy);
+    va_end(args_copy);
+    err = httpd_resp_send_chunk(req, buf, needed);
+
+    if (buf != stack_buf) {
+        free(buf);
+    }
+    return err;
+}
 
 static void update_camera_system(void)
 {
@@ -59,17 +96,28 @@ static void update_camera_system(void)
         camera_system.allocated_camera_count = connected_num;
     }
 
-    camera_system.camera_count = connected_num;
+    camera_system.camera_count = 0;
     camera_system.active_camera_count = 0;
     memset(camera_system.cameras, 0, connected_num * sizeof(camera_t));
     for (int i = 0; i < connected_num; ++i) {
-        if (app_uvc_get_dev_frame_info(i, &camera_system.cameras[i].info) == ESP_OK) {
-            snprintf(camera_system.cameras[i].id, sizeof(camera_system.cameras[i].id), "%d", camera_system.cameras[i].info.index);
-            if (camera_system.cameras[i].info.if_streaming) {
+        uvc_dev_info_t info = {0};
+        if (app_uvc_get_dev_frame_info(i, &info) == ESP_OK && info.resolution_count > 0) {
+            camera_t *cam = &camera_system.cameras[camera_system.camera_count];
+            cam->info = info;
+            snprintf(cam->id, sizeof(cam->id), "%d", info.index);
+            if (cam->info.if_streaming) {
                 camera_system.active_camera_count++;
             }
+            camera_system.camera_count++;
+        } else {
+            ESP_LOGW(TAG, "Skip camera slot %d because frame info is not ready yet", i);
         }
     }
+
+    ESP_LOGI(TAG, "/api/cameras snapshot: connected=%d ready=%d active=%d",
+             connected_num,
+             camera_system.camera_count,
+             camera_system.active_camera_count);
 }
 
 /* Set HTTP response content type according to file extension */
@@ -110,8 +158,8 @@ static esp_err_t static_file_handler(httpd_req_t *req)
         snprintf(filepath_gz, sizeof(filepath_gz), "%s%s.gz", STATIC_PATH, uri);
     }
 
-    FILE *file = fopen(filepath, "r");
-    FILE *file_gz = fopen(filepath_gz, "r");
+    FILE *file = fopen(filepath, "rb");
+    FILE *file_gz = fopen(filepath_gz, "rb");
 
     if (!file_gz && !file) {
         ESP_LOGE(TAG, "File not found: %s", filepath);
@@ -121,7 +169,9 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 
     if (file_gz) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-        fclose(file);
+        if (file != NULL) {
+            fclose(file);
+        }
         file = file_gz;
     }
 
@@ -148,64 +198,110 @@ static esp_err_t get_404_handler(httpd_req_t *req)
 static esp_err_t get_cameras_handler(httpd_req_t *req)
 {
     update_camera_system();
-    char response[1024];
-    int len = snprintf(response, sizeof(response),
-                       "{\"limit\":%d,\"cameras\":[", camera_system.camera_count);
+    esp_err_t err = ESP_OK;
 
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_type(req, "application/json");
+
+    err = send_json_chunkf(req, "{\"limit\":%d,\"cameras\":[", camera_system.camera_count);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    bool first_camera = true;
     for (int i = 0; i < camera_system.camera_count; ++i) {
         camera_t *cam = &camera_system.cameras[i];
-        len += snprintf(response + len, sizeof(response) - len,
-                        "{\"id\":\"%s\",\"resolutions\":[",
-                        cam->id);
-        for (int j = 0; j < cam->info.resolution_count; ++j) {
-            len += snprintf(response + len, sizeof(response) - len,
-                            "{\"width\":%d,\"height\":%d,\"index\":%d}%s",
-                            cam->info.resolution[j].width, cam->info.resolution[j].height, j,
-                            (j < cam->info.resolution_count - 1) ? "," : "");
+        if (!first_camera) {
+            err = httpd_resp_sendstr_chunk(req, ",");
+            if (err != ESP_OK) {
+                return err;
+            }
         }
-        len += snprintf(response + len, sizeof(response) - len, "]}%s",
-                        (i < camera_system.camera_count - 1) ? "," : "");
-    }
-    len += snprintf(response + len, sizeof(response) - len,
-                    "],\"activated\":[");
+        first_camera = false;
 
+        err = send_json_chunkf(req, "{\"id\":\"%s\",\"resolutions\":[", cam->id);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        for (int j = 0; j < cam->info.resolution_count; ++j) {
+            err = send_json_chunkf(req,
+                                   "%s{\"width\":%d,\"height\":%d,\"index\":%d}",
+                                   (j > 0) ? "," : "",
+                                   cam->info.resolution[j].width,
+                                   cam->info.resolution[j].height,
+                                   j);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+        err = httpd_resp_sendstr_chunk(req, "]}");
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    err = httpd_resp_sendstr_chunk(req, "],\"activated\":[");
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    bool first_active = true;
     for (int i = 0; i < camera_system.camera_count; ++i) {
         if (camera_system.cameras[i].info.if_streaming) {
             camera_t *cam = &camera_system.cameras[i];
+            if (!first_active) {
+                err = httpd_resp_sendstr_chunk(req, ",");
+                if (err != ESP_OK) {
+                    return err;
+                }
+            }
+            first_active = false;
 
-            len += snprintf(response + len, sizeof(response) - len,
-                            "{\"id\":\"%s\",\"resolution\":{\"width\":%d,\"height\":%d, \"index\":%d}}%s",
-                            cam->id,
-                            cam->info.resolution[cam->info.active_resolution].width,
-                            cam->info.resolution[cam->info.active_resolution].height,
-                            cam->info.active_resolution,
-                            (i < camera_system.active_camera_count - 1) ? "," : "");
+            err = send_json_chunkf(req,
+                                   "{\"id\":\"%s\",\"resolution\":{\"width\":%d,\"height\":%d,\"index\":%d}}",
+                                   cam->id,
+                                   cam->info.resolution[cam->info.active_resolution].width,
+                                   cam->info.resolution[cam->info.active_resolution].height,
+                                   cam->info.active_resolution);
+            if (err != ESP_OK) {
+                return err;
+            }
         }
     }
-    len += snprintf(response + len, sizeof(response) - len, "]}");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, response, strlen(response));
-    return ESP_OK;
+    err = httpd_resp_sendstr_chunk(req, "]}");
+    if (err != ESP_OK) {
+        return err;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 // API: POST /api/active
 static esp_err_t post_active_handler(httpd_req_t *req)
 {
     char content[128];
-    int ret = httpd_req_recv(req, content, sizeof(content));
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
     if (ret <= 0) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read request body");
         return ESP_FAIL;
     }
+    content[ret] = '\0';
 
     int id = 0, width = 0, height = 0, resolution_index = 0;
-    sscanf(content, "{\"id\":\"%d\",\"resolution\":{\"width\":%d,\"height\":%d,\"index\":%d}}", &id, &width, &height, &resolution_index);
+    if (sscanf(content, "{\"id\":\"%d\",\"resolution\":{\"width\":%d,\"height\":%d,\"index\":%d}}",
+               &id,
+               &width,
+               &height,
+               &resolution_index) != 4) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request body");
+        return ESP_FAIL;
+    }
 
     // Open streaming
-    printf("id: %d, resolution_index %d\n", id, resolution_index);
-    app_uvc_control_dev_by_index(id, true, resolution_index);
-    camera_system.active_camera_count++;
+    ESP_LOGI(TAG, "Activate camera id=%d resolution_index=%d (%dx%d)", id, resolution_index, width, height);
+    if (app_uvc_control_dev_by_index(id, true, resolution_index) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Camera not found");
+        return ESP_FAIL;
+    }
     // Wait for camera to start streaming
     vTaskDelay(200 / portTICK_PERIOD_MS);
 
@@ -223,7 +319,7 @@ static const char *_STREAM_PART = "Content-Type: image/jpeg\r\nAccess-Control-Al
 static esp_err_t transfer_stream_frame(httpd_req_t *req, uvc_host_frame_t *frame, int stream_id)
 {
     esp_err_t res = ESP_OK;
-    char *part_buf[128];
+    char part_buf[128];
     if (frame == NULL) {
         ESP_LOGE(TAG, "Camera capture failed");
         res = ESP_FAIL;
@@ -234,8 +330,8 @@ static esp_err_t transfer_stream_frame(httpd_req_t *req, uvc_host_frame_t *frame
     }
 
     if (res == ESP_OK) {
-        size_t hlen = snprintf((char *)part_buf, 128, _STREAM_PART, stream_id, frame->data_len);
-        res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
+        size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, stream_id, frame->data_len);
+        res = httpd_resp_send_chunk(req, part_buf, hlen);
     }
 
     if (res == ESP_OK) {
@@ -291,11 +387,10 @@ static esp_err_t get_stream_handler(httpd_req_t *req)
             }
         }
     }
-    ESP_LOGE(TAG, "trans error\n");
+    ESP_LOGI(TAG, "Stream %d ended", stream_id);
     res = httpd_resp_send_chunk(req, NULL, 0);
 
     app_uvc_control_dev_by_index(stream_id, false, -1);
-    camera_system.active_camera_count--;
 
     return res;
 }
