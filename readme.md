@@ -33,6 +33,7 @@
 - `c6_wifi_scan`：通过板载 `ESP32-C6` 扫描 WiFi
 - `camera_id_detect`：读取摄像头 ID 并识别 `SC2336` / `OV2710` / `OV5645`
 - `camera_wifi_stream`：通过 WiFi 输出摄像头 MJPEG 画面
+- `usb_host_hid_basic`：通过 USB OTG 验证外接 USB 键盘和鼠标的基础 Host 输入
 
 ### 2. `docs/`
 
@@ -299,3 +300,9 @@ V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复�
 - 硬件前提：T5-P4 的 USB OTG 口连接 U 盘，板载 ESP32-C6 已刷 `esp-hosted` slave 固件。
 - 与 `examples/usb_device_msc_wireless_disk` 的区别：前者是 Host 访问外设 U 盘，后者是把开发板自身暴露成 USB 磁盘。
 - 与 `examples/usb_host_hub_dual_camera` 的区别：前者面向 MSC 存储设备，后者面向 UVC 摄像头。
+
+## USB Host HID 示例
+
+- `examples/usb_host_hid_basic`：通过 T5-P4 的 USB OTG 口连接外接 USB 键盘或鼠标，在串口打印键盘输入以及鼠标位移和按键状态。
+- 硬件前提：T5-P4 的 USB OTG 口直连目标 USB HID 设备或带供电的 USB Hub，USB Host 信号使用 `GPIO49/50`。
+- 与 `examples/usb_host_msc_example` 的区别：这里演示的是 HID 输入设备验证，不做 U 盘挂载和网页文件管理。

@@ -242,6 +242,21 @@ idf.py monitor -p COM3
   - 与 `usb_device_msc_wireless_disk` 不同：本示例是 Host 访问外接 U 盘
   - 与 `usb_host_hub_dual_camera` 不同：本示例面向 MSC 存储设备，不是 UVC 摄像头
 
+#### **usb_host_hid_basic** - USB Host HID 键盘/鼠标验证
+- **功能**: 通过 USB OTG 连接外接 USB 键盘或鼠标，在串口打印按键、位移和按键状态
+- **依赖**:
+  - `usb_host_hid`: 官方 USB Host HID 组件
+- **前置要求**:
+  - USB OTG 口连接 USB 键盘、USB 鼠标或常见 USB Hub + HID 设备
+- **编译**:
+  ```bash
+  idf.py -C examples/usb_host_hid_basic set-target esp32p4
+  idf.py -C examples/usb_host_hid_basic build
+  ```
+- **说明**:
+  - 这是一个纯 HID Host 串口验证示例，不依赖 WiFi、Web UI 或板载 ESP32-C6
+  - ESP32-P4 USB OTG 使用 `GPIO49/50`
+
 ### 6️⃣ WiFi 和网络示例
 
 #### **c6_wifi_scan** - WiFi 扫描（通过 ESP32-C6）
@@ -363,6 +378,7 @@ idf.py monitor -p COM3
 | 功能 | 示例名称 | 难度 | 依赖硬件 |
 |------|--------|------|--------|
 | USB Host U 盘 | `usb_host_msc_example` | ⭐⭐ | USB U 盘 + WiFi 网页文件管理 |
+| USB Host HID | `usb_host_hid_basic` | ⭐⭐ | USB 键盘 / USB 鼠标 |
 | 基础 I2C 通信验证 | `pca9535` / `i2c_tools` | ⭐ | I2C 设备 |
 | 电源管理 | `sgm38121` / `bq_power_dashboard` | ⭐⭐ | BQ 芯片 |
 | 存储（SD/Flash） | `sd_card_test` / `es8311_spiffs` | ⭐ | SD 卡 或 Flash |
