@@ -227,6 +227,21 @@ idf.py monitor -p COM3
   - USB Hub 需供电
   - Safari 浏览器不推荐（兼容性问题）
 
+#### **usb_host_msc_example** - USB Host U 盘文件管理
+- **功能**: 通过 USB OTG 挂载外接 U 盘，并通过网页进行浏览、上传、下载和删除
+- **依赖**:
+  - `components/esp_msc_ota`: vendored USB Host MSC 组件
+  - WiFi（通过板载 ESP32-C6 `esp-hosted`）
+- **前置要求**:
+  - 板载 ESP32-C6 已刷 `esp-hosted` slave 固件
+  - USB OTG 口连接 U 盘或带供电的 USB Hub
+- **默认访问**:
+  - AP SSID: `ESP-Host-MSC-Demo`
+  - URL: `http://192.168.4.1`
+- **区别说明**:
+  - 与 `usb_device_msc_wireless_disk` 不同：本示例是 Host 访问外接 U 盘
+  - 与 `usb_host_hub_dual_camera` 不同：本示例面向 MSC 存储设备，不是 UVC 摄像头
+
 ### 6️⃣ WiFi 和网络示例
 
 #### **c6_wifi_scan** - WiFi 扫描（通过 ESP32-C6）
@@ -347,6 +362,7 @@ idf.py monitor -p COM3
 
 | 功能 | 示例名称 | 难度 | 依赖硬件 |
 |------|--------|------|--------|
+| USB Host U 盘 | `usb_host_msc_example` | ⭐⭐ | USB U 盘 + WiFi 网页文件管理 |
 | 基础 I2C 通信验证 | `pca9535` / `i2c_tools` | ⭐ | I2C 设备 |
 | 电源管理 | `sgm38121` / `bq_power_dashboard` | ⭐⭐ | BQ 芯片 |
 | 存储（SD/Flash） | `sd_card_test` / `es8311_spiffs` | ⭐ | SD 卡 或 Flash |

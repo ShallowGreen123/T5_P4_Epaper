@@ -292,3 +292,10 @@ V0.2 里新增了 `XL9555`，触摸复位、音频控制、HDMI 控制、C6 复�
 #define BOARD_EXT_NRF_CS_7682_RI      (51)
 #define BOARD_EXT_MODULE_EN_POWER_KEY (52)
 ~~~
+
+## USB Host MSC 示例
+
+- `examples/usb_host_msc_example`：把外接 USB U 盘挂载到 `/usb`，并通过 `http://192.168.4.1` 提供网页文件管理。
+- 硬件前提：T5-P4 的 USB OTG 口连接 U 盘，板载 ESP32-C6 已刷 `esp-hosted` slave 固件。
+- 与 `examples/usb_device_msc_wireless_disk` 的区别：前者是 Host 访问外设 U 盘，后者是把开发板自身暴露成 USB 磁盘。
+- 与 `examples/usb_host_hub_dual_camera` 的区别：前者面向 MSC 存储设备，后者面向 UVC 摄像头。
