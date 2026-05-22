@@ -3,8 +3,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "sdkconfig.h"
+#include "factory_assets.h"
 #include "factory_battery.h"
+#include "factory_display.h"
+#include "factory_touch.h"
 #include "factory_types.h"
 #include "scr_mrg.h"
 #include "ui_screens.h"
@@ -17,6 +23,12 @@ constexpr uint32_t kLowPowerThresholdMv = CONFIG_FACTORY_BATTERY_LOW_VOLTAGE_MV;
 constexpr uint32_t kLowPowerCountdownMs =
     (uint32_t)CONFIG_FACTORY_BATTERY_LOW_POWER_COUNTDOWN_SEC * 1000U;
 constexpr uint32_t kLowPowerPollMs = CONFIG_FACTORY_BATTERY_LOW_POWER_POLL_MS;
+constexpr uint32_t kInactivityPollMs = 1000U;
+constexpr uint32_t kPowerOffSettleMs = 250U;
+constexpr char kPowerOffMessage[] =
+    "Device has been powered off. Please press and hold the `Power` button to turn it on.";
+constexpr char kPowerOffFailedMessage[] =
+    "Shutdown failed. Please disconnect USB power and try again.";
 
 static lv_obj_t *s_low_power_overlay = nullptr;
 static lv_obj_t *s_low_power_card = nullptr;
@@ -27,7 +39,20 @@ static lv_timer_t *s_low_power_timer = nullptr;
 static bool s_low_power_active = false;
 static uint32_t s_low_power_started_at_ms = 0U;
 
+static lv_obj_t *s_power_off_overlay = nullptr;
+static lv_obj_t *s_power_off_label = nullptr;
+static bool s_power_off_requested = false;
+static bool s_power_off_request_cancelable = false;
+static bool s_power_off_active = false;
+static bool s_power_off_failed = false;
+
+static lv_timer_t *s_inactivity_timer = nullptr;
+static uint8_t s_inactivity_shutdown_minutes = 1U;
+static uint32_t s_last_touch_activity_ms = 0U;
+
 static void refresh_low_power_protection();
+static void refresh_inactivity_shutdown();
+static bool request_power_off_internal(bool cancelable_by_touch);
 
 static void set_text_if_changed(lv_obj_t *label, const char *text)
 {
@@ -39,6 +64,35 @@ static void set_text_if_changed(lv_obj_t *label, const char *text)
     if (current == nullptr || strcmp(current, text) != 0) {
         lv_label_set_text(label, text);
     }
+}
+
+static uint8_t normalize_inactivity_shutdown_minutes(uint8_t minutes)
+{
+    switch (minutes) {
+        case 0:
+        case 1:
+        case 5:
+        case 10:
+        case 30:
+            return minutes;
+        default:
+            return 0;
+    }
+}
+
+static uint32_t inactivity_shutdown_timeout_ms()
+{
+    return (uint32_t)s_inactivity_shutdown_minutes * 60U * 1000U;
+}
+
+static bool shutdown_supported_now()
+{
+    factory_battery_refresh();
+    const factory_battery_state_t *state = factory_battery_get_state();
+    return state != nullptr &&
+           state->charger_ready &&
+           state->charger_read_ok &&
+           !state->vbus_connected;
 }
 
 static bool low_power_popup_visible()
@@ -93,6 +147,58 @@ static void cancel_low_power_countdown()
     s_low_power_active = false;
     s_low_power_started_at_ms = 0U;
     hide_low_power_popup();
+}
+
+static void power_off_overlay_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || !s_power_off_failed || s_power_off_overlay == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(s_power_off_overlay, LV_OBJ_FLAG_HIDDEN);
+    s_power_off_failed = false;
+    s_power_off_active = false;
+    s_last_touch_activity_ms = lv_tick_get();
+    factory_display_request_full_refresh();
+}
+
+static void create_power_off_overlay()
+{
+    lv_obj_t *top = lv_layer_top();
+    if (top == nullptr) {
+        return;
+    }
+
+    s_power_off_overlay = lv_obj_create(top);
+    lv_obj_set_size(s_power_off_overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s_power_off_overlay, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_power_off_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_power_off_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_power_off_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(s_power_off_overlay, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(s_power_off_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_power_off_overlay, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_power_off_overlay, power_off_overlay_event_cb, LV_EVENT_CLICKED, nullptr);
+
+    s_power_off_label = lv_label_create(s_power_off_overlay);
+    lv_obj_set_width(s_power_off_label, lv_pct(86));
+    lv_label_set_long_mode(s_power_off_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_power_off_label, kPowerOffMessage);
+    lv_obj_align(s_power_off_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_align(s_power_off_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_power_off_label, FACTORY_FONT_TITLE, LV_PART_MAIN);
+    lv_obj_set_style_text_color(s_power_off_label, lv_color_black(), LV_PART_MAIN);
+}
+
+static void show_power_off_overlay(const char *message)
+{
+    if (s_power_off_overlay == nullptr || s_power_off_label == nullptr) {
+        return;
+    }
+
+    set_text_if_changed(s_power_off_label, message);
+    lv_obj_clear_flag(s_power_off_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_power_off_overlay);
 }
 
 static void create_low_power_popup()
@@ -153,6 +259,12 @@ static void low_power_timer_cb(lv_timer_t *timer)
     refresh_low_power_protection();
 }
 
+static void inactivity_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    refresh_inactivity_shutdown();
+}
+
 static void refresh_low_power_protection()
 {
     factory_battery_refresh();
@@ -189,13 +301,47 @@ static void refresh_low_power_protection()
     }
 
     update_low_power_popup(0U);
+    if (!request_power_off_internal(false)) {
+        // Keep the protection latched and retry on the next polling cycle unless power is restored.
+        s_low_power_started_at_ms = lv_tick_get() - kLowPowerCountdownMs + 1000U;
+    }
+}
 
-    if (factory_battery_shutdown()) {
+static void refresh_inactivity_shutdown()
+{
+    if (s_power_off_requested || s_power_off_active || s_power_off_failed) {
         return;
     }
 
-    // Keep the protection latched and retry on the next polling cycle unless power is restored.
-    s_low_power_started_at_ms = lv_tick_get() - kLowPowerCountdownMs + 1000U;
+    if (s_inactivity_shutdown_minutes == 0U || !factory_touch_is_ready()) {
+        s_last_touch_activity_ms = lv_tick_get();
+        return;
+    }
+
+    if (!shutdown_supported_now()) {
+        s_last_touch_activity_ms = lv_tick_get();
+        return;
+    }
+
+    const uint32_t timeout_ms = inactivity_shutdown_timeout_ms();
+    if (timeout_ms == 0U || lv_tick_elaps(s_last_touch_activity_ms) < timeout_ms) {
+        return;
+    }
+
+    if (!request_power_off_internal(true)) {
+        s_last_touch_activity_ms = lv_tick_get();
+    }
+}
+
+static bool request_power_off_internal(bool cancelable_by_touch)
+{
+    if (s_power_off_requested || s_power_off_active) {
+        return false;
+    }
+
+    s_power_off_requested = true;
+    s_power_off_request_cancelable = cancelable_by_touch;
+    return true;
 }
 
 }  // namespace
@@ -234,6 +380,70 @@ extern "C" void factory_ui_init(void)
     scr_mgr_switch(FACTORY_PAGE_HOME, false);
 
     create_low_power_popup();
+    create_power_off_overlay();
+    s_last_touch_activity_ms = lv_tick_get();
+
     refresh_low_power_protection();
     s_low_power_timer = lv_timer_create(low_power_timer_cb, kLowPowerPollMs, nullptr);
+    s_inactivity_timer = lv_timer_create(inactivity_timer_cb, kInactivityPollMs, nullptr);
+}
+
+extern "C" void factory_ui_task_handler(void)
+{
+    if (!s_power_off_requested || s_power_off_active) {
+        return;
+    }
+
+    s_power_off_requested = false;
+    s_power_off_request_cancelable = false;
+    if (!shutdown_supported_now()) {
+        s_last_touch_activity_ms = lv_tick_get();
+        return;
+    }
+
+    cancel_low_power_countdown();
+    show_power_off_overlay(kPowerOffMessage);
+    s_power_off_active = true;
+    s_power_off_failed = false;
+
+    factory_display_refresh_now_clean();
+    vTaskDelay(pdMS_TO_TICKS(kPowerOffSettleMs));
+
+    if (factory_battery_shutdown()) {
+        return;
+    }
+
+    show_power_off_overlay(kPowerOffFailedMessage);
+    s_power_off_active = false;
+    s_power_off_failed = true;
+    factory_display_request_full_refresh();
+    s_last_touch_activity_ms = lv_tick_get();
+}
+
+extern "C" void factory_ui_notify_touch_activity(void)
+{
+    if (s_power_off_requested && s_power_off_request_cancelable && !s_power_off_active) {
+        s_power_off_requested = false;
+        s_power_off_request_cancelable = false;
+    }
+
+    if (!s_power_off_active) {
+        s_last_touch_activity_ms = lv_tick_get();
+    }
+}
+
+extern "C" void factory_ui_set_inactivity_shutdown_minutes(uint8_t minutes)
+{
+    s_inactivity_shutdown_minutes = normalize_inactivity_shutdown_minutes(minutes);
+    s_last_touch_activity_ms = lv_tick_get();
+}
+
+extern "C" uint8_t factory_ui_get_inactivity_shutdown_minutes(void)
+{
+    return s_inactivity_shutdown_minutes;
+}
+
+extern "C" bool factory_ui_request_power_off(void)
+{
+    return request_power_off_internal(false);
 }

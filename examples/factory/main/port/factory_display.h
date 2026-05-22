@@ -12,6 +12,8 @@ extern "C" {
 bool factory_display_init(void);
 void factory_display_task_handler(void);
 void factory_display_request_full_refresh(void);
+void factory_display_refresh_now(bool full_refresh);
+void factory_display_refresh_now_clean(void);
 const factory_display_mode_info_t *factory_display_get_mode_info(void);
 
 void factory_display_set_rotation(uint16_t rotation_deg);

@@ -7,8 +7,8 @@
 
 #include "factory_assets.h"
 #include "factory_battery.h"
-#include "factory_display.h"
 #include "lvgl.h"
+#include "ui.h"
 #include "ui_theme.h"
 
 namespace {
@@ -42,21 +42,17 @@ enum : size_t {
 };
 
 constexpr uint32_t kBatteryRefreshMs = CONFIG_FACTORY_BATTERY_REFRESH_MS;
-constexpr uint32_t kShutdownDelayMs = 2500;
 
 static lv_obj_t *s_root = nullptr;
 static lv_obj_t *s_mode_label = nullptr;
 static lv_obj_t *s_summary_label = nullptr;
 static lv_timer_t *s_refresh_timer = nullptr;
-static lv_timer_t *s_shutdown_timer = nullptr;
 static lv_obj_t *s_gauge_lines[GAUGE_LINE_COUNT] = {};
 static lv_obj_t *s_charger_lines[CHARGER_LINE_COUNT] = {};
 static lv_obj_t *s_shutdown_btn = nullptr;
 static lv_obj_t *s_shutdown_prompt_overlay = nullptr;
 static lv_obj_t *s_shutdown_prompt_card = nullptr;
 static lv_obj_t *s_shutdown_prompt_text = nullptr;
-static lv_obj_t *s_shutdown_message_overlay = nullptr;
-static lv_obj_t *s_shutdown_message_label = nullptr;
 
 static void refresh_battery_ui();
 
@@ -103,12 +99,6 @@ static bool shutdown_prompt_visible()
            !lv_obj_has_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
-static bool shutdown_message_visible()
-{
-    return s_shutdown_message_overlay != nullptr &&
-           !lv_obj_has_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
-}
-
 static void refresh_shutdown_button()
 {
     if (s_shutdown_btn == nullptr) {
@@ -121,9 +111,7 @@ static void refresh_shutdown_button()
         state->charger_ready &&
         state->charger_read_ok &&
         !state->vbus_connected &&
-        !shutdown_prompt_visible() &&
-        !shutdown_message_visible() &&
-        s_shutdown_timer == nullptr;
+        !shutdown_prompt_visible();
 
     if (shutdown_allowed) {
         lv_obj_clear_state(s_shutdown_btn, LV_STATE_DISABLED);
@@ -185,28 +173,6 @@ static void show_shutdown_prompt()
 
     lv_obj_clear_flag(s_shutdown_prompt_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_shutdown_prompt_overlay);
-    refresh_shutdown_button();
-}
-
-static void hide_shutdown_message()
-{
-    if (s_shutdown_message_overlay == nullptr) {
-        return;
-    }
-
-    lv_obj_add_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
-    refresh_shutdown_button();
-}
-
-static void show_shutdown_message(const char *message)
-{
-    if (s_shutdown_message_overlay == nullptr || s_shutdown_message_label == nullptr) {
-        return;
-    }
-
-    lv_label_set_text(s_shutdown_message_label, message);
-    lv_obj_clear_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_shutdown_message_overlay);
     refresh_shutdown_button();
 }
 
@@ -415,22 +381,6 @@ static void refresh_timer_cb(lv_timer_t *timer)
     refresh_battery_ui();
 }
 
-static void shutdown_timer_cb(lv_timer_t *timer)
-{
-    if (timer != nullptr) {
-        lv_timer_del(timer);
-    }
-    s_shutdown_timer = nullptr;
-
-    if (factory_battery_shutdown()) {
-        return;
-    }
-
-    show_shutdown_message("Shutdown failed.");
-    factory_display_request_full_refresh();
-    refresh_battery_ui();
-}
-
 static void shutdown_btn_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -469,15 +419,7 @@ static void shutdown_prompt_confirm_event_cb(lv_event_t *e)
     }
 
     hide_shutdown_prompt();
-    show_shutdown_message("The device has been shut down.");
-    factory_display_request_full_refresh();
-
-    if (s_shutdown_timer != nullptr) {
-        lv_timer_del(s_shutdown_timer);
-        s_shutdown_timer = nullptr;
-    }
-    s_shutdown_timer = lv_timer_create(shutdown_timer_cb, kShutdownDelayMs, nullptr);
-    lv_timer_set_repeat_count(s_shutdown_timer, 1);
+    (void)factory_ui_request_power_off();
 }
 
 static void create_shutdown_prompt(lv_obj_t *parent)
@@ -539,28 +481,6 @@ static void create_shutdown_prompt(lv_obj_t *parent)
     lv_obj_set_width(confirm_btn, lv_pct(48));
 }
 
-static void create_shutdown_message_overlay(lv_obj_t *parent)
-{
-    s_shutdown_message_overlay = lv_obj_create(parent);
-    lv_obj_set_size(s_shutdown_message_overlay, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(s_shutdown_message_overlay, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_shutdown_message_overlay, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_shutdown_message_overlay, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_shutdown_message_overlay, 0, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(s_shutdown_message_overlay, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_shutdown_message_overlay, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
-
-    s_shutdown_message_label = lv_label_create(s_shutdown_message_overlay);
-    lv_obj_set_width(s_shutdown_message_label, lv_pct(88));
-    lv_label_set_long_mode(s_shutdown_message_label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(s_shutdown_message_label, "The device has been shut down.");
-    lv_obj_align(s_shutdown_message_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_align(s_shutdown_message_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_shutdown_message_label, FACTORY_FONT_UI_WIFI_STATE, LV_PART_MAIN);
-    lv_obj_set_style_text_color(s_shutdown_message_label, lv_color_black(), LV_PART_MAIN);
-}
-
 static void create_battery(lv_obj_t *parent)
 {
     s_root = parent;
@@ -602,7 +522,6 @@ static void create_battery(lv_obj_t *parent)
     lv_obj_set_width(s_shutdown_btn, lv_pct(100));
 
     create_shutdown_prompt(parent);
-    create_shutdown_message_overlay(parent);
 
     refresh_battery_ui();
 }
@@ -610,7 +529,6 @@ static void create_battery(lv_obj_t *parent)
 static void entry_battery(void)
 {
     hide_shutdown_prompt();
-    hide_shutdown_message();
     refresh_battery_ui();
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
@@ -626,13 +544,7 @@ static void exit_battery(void)
         s_refresh_timer = nullptr;
     }
 
-    if (s_shutdown_timer != nullptr) {
-        lv_timer_del(s_shutdown_timer);
-        s_shutdown_timer = nullptr;
-    }
-
     hide_shutdown_prompt();
-    hide_shutdown_message();
 }
 
 static void destroy_battery(void)
@@ -641,13 +553,10 @@ static void destroy_battery(void)
     s_mode_label = nullptr;
     s_summary_label = nullptr;
     s_refresh_timer = nullptr;
-    s_shutdown_timer = nullptr;
     s_shutdown_btn = nullptr;
     s_shutdown_prompt_overlay = nullptr;
     s_shutdown_prompt_card = nullptr;
     s_shutdown_prompt_text = nullptr;
-    s_shutdown_message_overlay = nullptr;
-    s_shutdown_message_label = nullptr;
     std::memset(s_gauge_lines, 0, sizeof(s_gauge_lines));
     std::memset(s_charger_lines, 0, sizeof(s_charger_lines));
 }

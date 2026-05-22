@@ -2,6 +2,7 @@
 
 #include "factory_display.h"
 #include "lvgl.h"
+#include "ui.h"
 #include "ui_theme.h"
 
 namespace {
@@ -14,8 +15,10 @@ static lv_obj_t *s_full_dd = nullptr;
 static lv_obj_t *s_dither_sw = nullptr;
 static lv_obj_t *s_low_flash_sw = nullptr;
 static lv_obj_t *s_auto_full_dd = nullptr;
+static lv_obj_t *s_auto_shutdown_dd = nullptr;
 
 static const uint8_t kAutoFullOptions[] = {0, 5, 10, 15, 20, 25, 30};
+static const uint8_t kAutoShutdownOptions[] = {0, 1, 5, 10, 30};
 
 static void sync_switch_checked(lv_obj_t *sw, bool checked)
 {
@@ -83,6 +86,16 @@ static void sync_adjust_widgets()
         }
     }
     lv_dropdown_set_selected(s_auto_full_dd, auto_full_idx);
+
+    uint8_t auto_shutdown = factory_ui_get_inactivity_shutdown_minutes();
+    uint16_t auto_shutdown_idx = 0;
+    for (uint16_t i = 0; i < sizeof(kAutoShutdownOptions) / sizeof(kAutoShutdownOptions[0]); ++i) {
+        if (kAutoShutdownOptions[i] == auto_shutdown) {
+            auto_shutdown_idx = i;
+            break;
+        }
+    }
+    lv_dropdown_set_selected(s_auto_shutdown_dd, auto_shutdown_idx);
     update_mode_dependency();
 }
 
@@ -199,6 +212,19 @@ static void auto_full_event_cb(lv_event_t *e)
     factory_display_set_max_partial_refreshes_before_full(kAutoFullOptions[selected]);
 }
 
+static void auto_shutdown_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+
+    int selected = lv_dropdown_get_selected(s_auto_shutdown_dd);
+    if (selected < 0 || selected >= (int)(sizeof(kAutoShutdownOptions) / sizeof(kAutoShutdownOptions[0]))) {
+        selected = 0;
+    }
+    factory_ui_set_inactivity_shutdown_minutes(kAutoShutdownOptions[selected]);
+}
+
 static void full_refresh_btn_event_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
@@ -216,7 +242,7 @@ static void create_adjust(lv_obj_t *parent)
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_scroll_dir(panel, LV_DIR_VER);
 
-    lv_obj_t *summary = factory_ui_create_info_label(panel, "Switch between the current 1bpp refresh path and the demo-style 4bpp grayscale path, then tune the mode-specific controls below.");
+    lv_obj_t *summary = factory_ui_create_info_label(panel, "Switch between the current 1bpp refresh path and the demo-style 4bpp grayscale path, then tune the mode-specific controls below. Touch inactivity auto shutdown is also configured here.");
     lv_obj_set_width(summary, lv_pct(100));
 
     lv_obj_t *row_mode = create_row(panel, "Color mode");
@@ -243,6 +269,9 @@ static void create_adjust(lv_obj_t *parent)
     lv_obj_t *row_auto_full = create_row(panel, "Full after partials");
     s_auto_full_dd = create_dropdown(row_auto_full, "Disable\n5\n10\n15\n20\n25\n30");
 
+    lv_obj_t *row_auto_shutdown = create_row(panel, "Auto shutdown");
+    s_auto_shutdown_dd = create_dropdown(row_auto_shutdown, "Disable\n1 min\n5 min\n10 min\n30 min");
+
     lv_obj_t *btn = factory_ui_create_action_button(panel, "Run Full Refresh", full_refresh_btn_event_cb, nullptr);
     lv_obj_set_width(btn, 280);
 
@@ -254,6 +283,7 @@ static void create_adjust(lv_obj_t *parent)
     lv_obj_add_event_cb(s_dither_sw, dither_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(s_low_flash_sw, low_flash_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(s_auto_full_dd, auto_full_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(s_auto_shutdown_dd, auto_shutdown_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
 
     sync_adjust_widgets();
 }
@@ -275,6 +305,7 @@ static void destroy_adjust(void)
     s_mode_dd = nullptr;
     s_low_flash_sw = nullptr;
     s_auto_full_dd = nullptr;
+    s_auto_shutdown_dd = nullptr;
 }
 
 static scr_lifecycle_t s_adjust_lifecycle = {

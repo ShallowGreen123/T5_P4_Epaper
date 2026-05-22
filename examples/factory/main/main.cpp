@@ -103,6 +103,7 @@ extern "C" void app_main(void)
     while (true) {
         poll_boot_button_full_refresh();
         factory_display_task_handler();
+        factory_ui_task_handler();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

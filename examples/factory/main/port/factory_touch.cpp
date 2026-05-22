@@ -9,6 +9,7 @@
 #include "bsp/esp-bsp.h"
 #include "board_config.h"
 #include "factory_display.h"
+#include "ui.h"
 
 namespace {
 
@@ -116,6 +117,7 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
         s_diag.raw_y = (int16_t)touch_points[0].y;
         s_diag.sample_count++;
         s_diag.status_text = "Touch ready";
+        factory_ui_notify_touch_activity();
 
         data->state = LV_INDEV_STATE_PR;
     } else {

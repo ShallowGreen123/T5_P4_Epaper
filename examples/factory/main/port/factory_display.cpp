@@ -52,6 +52,7 @@ static bool s_enable_dither = false;
 static bool s_low_flash = true;
 static bool s_first_4bpp_refresh = true;
 static bool s_force_full_refresh = true;
+static bool s_force_clean_full_refresh = false;
 static bool s_display_started = false;
 static int s_pending_y_min = FACTORY_BOARD_HEIGHT;
 static int s_pending_y_max = -1;
@@ -135,7 +136,7 @@ static bool ensure_full_refresh_backup_1bpp()
     return true;
 }
 
-static bool run_monochrome_recondition_full_refresh()
+static bool run_monochrome_recondition_full_refresh(bool deep_clean)
 {
     if (s_framebuffer == nullptr || !ensure_full_refresh_backup_1bpp()) {
         return false;
@@ -143,20 +144,22 @@ static bool run_monochrome_recondition_full_refresh()
 
     memcpy(s_full_refresh_backup_1bpp, s_framebuffer, kFramebufferBytes1bpp);
 
-    // if (s_epaper.clearBlack(true) != BBEP_SUCCESS) {
-    //     s_framebuffer = s_epaper.currentBuffer();
-    //     if (s_framebuffer != nullptr) {
-    //         memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
-    //     }
-    //     ESP_LOGW(TAG, "clearBlack failed during 1bpp recondition refresh");
-    //     return false;
-    // }
+    if (deep_clean) {
+        if (s_epaper.clearBlack(true) != BBEP_SUCCESS) {
+            s_framebuffer = s_epaper.currentBuffer();
+            if (s_framebuffer != nullptr) {
+                memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
+            }
+            ESP_LOGW(TAG, "clearBlack failed during 1bpp deep clean refresh");
+            return false;
+        }
 
-    // s_framebuffer = s_epaper.currentBuffer();
-    // if (s_framebuffer == nullptr) {
-    //     ESP_LOGE(TAG, "currentBuffer returned null after 1bpp clearBlack");
-    //     return false;
-    // }
+        s_framebuffer = s_epaper.currentBuffer();
+        if (s_framebuffer == nullptr) {
+            ESP_LOGE(TAG, "currentBuffer returned null after 1bpp clearBlack");
+            return false;
+        }
+    }
 
     if (s_epaper.clearWhite(true) != BBEP_SUCCESS) {
         memcpy(s_framebuffer, s_full_refresh_backup_1bpp, kFramebufferBytes1bpp);
@@ -265,6 +268,7 @@ static void flush_to_panel()
 
         s_epaper.fullUpdate(clear_mode, true);
         s_force_full_refresh = false;
+        s_force_clean_full_refresh = false;
         s_display_started = true;
         s_first_4bpp_refresh = false;
         s_partial_refresh_count = 0;
@@ -277,7 +281,9 @@ static void flush_to_panel()
         s_partial_refresh_count >= s_max_partial_refreshes_before_full;
 
     if (s_force_full_refresh || !s_display_started || auto_full_refresh) {
-        if (!run_monochrome_recondition_full_refresh()) {
+        const bool clean_full_refresh = s_force_clean_full_refresh;
+        s_force_clean_full_refresh = false;
+        if (!run_monochrome_recondition_full_refresh(clean_full_refresh)) {
             const int clear_mode = s_display_started ? kRuntimeFullRefreshMode : kInitialFullRefreshMode;
             s_epaper.fullUpdate(clear_mode, true);
         }
@@ -579,8 +585,45 @@ extern "C" void factory_display_task_handler(void)
 extern "C" void factory_display_request_full_refresh(void)
 {
     s_force_full_refresh = true;
+    s_force_clean_full_refresh = false;
     if (lv_scr_act() != nullptr) {
         lv_obj_invalidate(lv_scr_act());
+    }
+}
+
+extern "C" void factory_display_refresh_now(bool full_refresh)
+{
+    if (full_refresh) {
+        s_force_full_refresh = true;
+    }
+    s_force_clean_full_refresh = false;
+
+    if (lv_scr_act() != nullptr) {
+        lv_obj_invalidate(lv_scr_act());
+    }
+    if (lv_layer_top() != nullptr) {
+        lv_obj_invalidate(lv_layer_top());
+    }
+
+    if (s_disp != nullptr) {
+        lv_refr_now(s_disp);
+    }
+}
+
+extern "C" void factory_display_refresh_now_clean(void)
+{
+    s_force_full_refresh = true;
+    s_force_clean_full_refresh = true;
+
+    if (lv_scr_act() != nullptr) {
+        lv_obj_invalidate(lv_scr_act());
+    }
+    if (lv_layer_top() != nullptr) {
+        lv_obj_invalidate(lv_layer_top());
+    }
+
+    if (s_disp != nullptr) {
+        lv_refr_now(s_disp);
     }
 }
 
