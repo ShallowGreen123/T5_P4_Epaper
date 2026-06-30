@@ -1,8 +1,9 @@
 idf_component_register(
-    SRCS "main.cpp"
+    SRCS
+        "main.cpp"
+        "panel_epd_esp32p4_compat.cpp"
     INCLUDE_DIRS "."
     REQUIRES
-        M5GFX
         driver
         esp_driver_i2c
         esp_timer

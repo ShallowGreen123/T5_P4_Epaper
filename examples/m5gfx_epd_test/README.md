@@ -1,6 +1,6 @@
 # M5GFX EPD Test
 
-This ESP-IDF example drives the T5-P4 E-Paper panel through `components/M5GFX`.
+This ESP-IDF example drives the T5-P4 E-Paper panel through the managed `m5stack/m5gfx` component declared in `main/idf_component.yml`.
 
 It uses the same ED047TC1-style grayscale waveform path as the T5S3 reader project, but with the T5-P4 V0.2 board wiring:
 

@@ -224,7 +224,6 @@ public:
         bus_cfg.pin_le = T5_BOARD_EPD_LEH;
         bus_cfg.pin_cl = T5_BOARD_EPD_CKH;
         bus_cfg.bus_width = 8;
-        bus_cfg.slow_sph = true;
         bus_.config(bus_cfg);
 
         panel_.setBus(&bus_);
