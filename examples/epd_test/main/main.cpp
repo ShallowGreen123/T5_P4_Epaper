@@ -281,7 +281,7 @@ void draw_test_pattern()
     display.setTextColor(TFT_BLACK, TFT_WHITE);
     display.setTextSize(3);
     display.setCursor(48, 48);
-    display.print("T5-P4 M5GFX EPD Test");
+    display.print("T5-P4 EPD Test");
 
     display.setTextSize(2);
     display.setCursor(52, 96);
