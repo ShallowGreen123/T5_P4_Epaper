@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf:
+    version: '>=5.4'
+  m5stack/m5gfx: ^0.2.23
+  espressif/esp_wifi_remote: ^1.5.0
