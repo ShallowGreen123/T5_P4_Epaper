@@ -543,6 +543,16 @@ void draw_test_pattern()
     draw_orientation_marks(width, height);
 }
 
+void condition_panel_to_white()
+{
+    display.setRotation(kPortraitRotation);
+    display.setEpdMode(lgfx::epd_mode_t::epd_quality);
+    display.fillScreen(TFT_WHITE);
+    ESP_LOGI(kTag, "conditioning panel with a full white refresh");
+    display.display();
+    display.waitDisplay();
+}
+
 }  // namespace
 
 extern "C" void app_main(void)
@@ -565,6 +575,7 @@ extern "C" void app_main(void)
     }
 
     log_heap("after init");
+    condition_panel_to_white();
     draw_test_pattern();
     ESP_LOGI(kTag, "drawing size after rotation: %dx%d",
              static_cast<int>(display.width()), static_cast<int>(display.height()));

@@ -133,11 +133,12 @@ void Bus_EPD::writeScanLine(const uint8_t *data, uint32_t length)
         return;
     }
 
-    // The I80 D/C signal is wired to XSTL. The 16-bit command phase sends the
-    // first source word with XSTL low; the data phase sends the rest with XSTL
-    // high. This creates the required one-clock start pulse without a CS pin.
-    const int first_word = static_cast<int>(data[0])
-                         | (static_cast<int>(data[1]) << 8);
+    // Panel_EPD stores the first four pixels in the first byte, but this
+    // 16-bit source driver expects that byte on D15..D8. The DMA data phase
+    // uses swap_color_bytes; apply the same swap to the command-phase word
+    // that creates the one-clock-low XSTL pulse.
+    const int first_word = static_cast<int>(data[1])
+                         | (static_cast<int>(data[0]) << 8);
 
     _bus_busy = true;
     gpio_lo(_config.pin_le);
@@ -202,6 +203,7 @@ bool Bus_EPD::init(void)
     io_config.dc_levels.dc_cmd_level = 0;
     io_config.dc_levels.dc_dummy_level = 1;
     io_config.dc_levels.dc_data_level = 1;
+    io_config.flags.swap_color_bytes = 1;
     io_config.flags.pclk_idle_low = 1;
     io_config.cs_gpio_num = -1;
 
@@ -210,7 +212,8 @@ bool Bus_EPD::init(void)
     }
 
     ESP_LOGI(kDiagTag,
-             "16-bit I80 ready: CKH=%ld Hz, XSTL uses D/C command phase (1 clock), CS disabled",
+             "16-bit I80 ready: CKH=%ld Hz, byte-lane swap=on, "
+             "XSTL uses D/C command phase (1 clock), CS disabled",
              static_cast<long>(_config.bus_speed));
     return true;
 }

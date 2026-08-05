@@ -18,10 +18,12 @@ portrait drawing surface.
 ## Panel configuration
 
 - 16-bit I80 EPD data bus
-- 20 MHz source clock (50 ns typical clock cycle in the specification)
+- 20 MHz source clock, reduced for the fly-wire connection
 - 10 dummy clocks after each source line
 - `Panel_EPD::line_padding = 20` bytes (10 clocks x 2 bytes on a 16-bit bus)
 - XSTL is low for exactly the first 16-bit source clock of each line
+- Adjacent DMA bytes are swapped so each 8-pixel word reaches the panel as
+  pixels 0..3 on D15..D8 and pixels 4..7 on D7..D0
 - TPS651851 VCOM default: -1.60 V
 - GPIO53 and GPIO54 are forced low so the front light stays off
 
@@ -36,6 +38,15 @@ keeps XSTL low for the entire DMA line. This example supplies a local compatible
 implementation in `main/Bus_EPD_16.cpp`: the I80 command phase carries the first
 16-bit word with XSTL low, then the data phase carries the remaining words with
 XSTL high. The generated `managed_components` directory is not modified.
+
+ESP32-P4 I80 normally places the first byte of each DMA word on D7..D0. M5GFX's
+EPD encoder stores the first four pixels in that byte, while this 16-bit panel
+expects the first four pixels on D15..D8. Without the adjacent-byte swap, every
+8-pixel group is displayed as pixels 4..7 followed by pixels 0..3. Large blocks
+still look plausible, but text, curves, and diagonal lines appear broken. The
+local bus swaps both the DMA data and the first command-phase word. The example
+also performs one full white quality refresh before drawing the test pattern so
+an older incorrectly ordered image does not remain as ghosting.
 
 VCOM is panel-lot-specific. Change `kVcomMillivolts` in `main/main.cpp` if the
 panel label or factory data specifies another value.
@@ -85,11 +96,11 @@ Lines tagged `EPD_DIAG` report:
 - every waveform frame's line count, source clocks per line, XSTL pulse width,
   and I80 transmit error count
 
-A healthy scan reports `lines=684`, `clocks/line=162`, `XSTL=1-clock`, and
-`tx_errors=0`. A powered panel should report TPS `PG=0xFA`, VCOM registers for
-the configured voltage, and PCA `PWR_GOOD=1`. During standby, TPS `PG=0x20` is
-allowed: it only means the VN base converter remains ready while all four panel
-rails (VDDH, VPOS, VEE, and VNEG) are off.
+A healthy scan reports `lines=684`, `clocks/line=162`, `XSTL=1-clock`,
+`byte-lane swap=on`, and `tx_errors=0`. A powered panel should report TPS
+`PG=0xFA`, VCOM registers for the configured voltage, and PCA `PWR_GOOD=1`.
+During standby, TPS `PG=0x20` is allowed: it only means the VN base converter
+remains ready while all four panel rails (VDDH, VPOS, VEE, and VNEG) are off.
 
 D0-D15, CKH, XSTL, XLE, CKV, and STV are output-only signals. DMA completion
 only proves that the ESP32-P4 peripheral sent data; it cannot prove that a
