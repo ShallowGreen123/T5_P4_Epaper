@@ -553,6 +553,16 @@ void condition_panel_to_white()
     display.waitDisplay();
 }
 
+void condition_panel_to_black()
+{
+    display.setRotation(kPortraitRotation);
+    display.setEpdMode(lgfx::epd_mode_t::epd_quality);
+    display.fillScreen(TFT_BLACK);
+    ESP_LOGI(kTag, "conditioning panel with a full black refresh");
+    display.display();
+    display.waitDisplay();
+}
+
 }  // namespace
 
 extern "C" void app_main(void)
@@ -576,6 +586,12 @@ extern "C" void app_main(void)
 
     log_heap("after init");
     condition_panel_to_white();
+    // 延时2s
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    // 黑屏
+    condition_panel_to_black();
+    // 延时2秒
+    vTaskDelay(pdMS_TO_TICKS(2000));
     draw_test_pattern();
     ESP_LOGI(kTag, "drawing size after rotation: %dx%d",
              static_cast<int>(display.width()), static_cast<int>(display.height()));
