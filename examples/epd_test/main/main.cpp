@@ -11,6 +11,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lgfx/v1/platforms/esp32/Bus_EPD.h"
@@ -38,12 +39,18 @@ constexpr gpio_num_t kEpdD7 = GPIO_NUM_34;
 constexpr gpio_num_t kDummyDc = GPIO_NUM_22;
 
 constexpr uint8_t kTpsRegEnable = 0x01;
-constexpr uint8_t kTpsRegVcom = 0x03;
+constexpr uint8_t kTpsRegVcom1 = 0x03;
+constexpr uint8_t kTpsRegVcom2 = 0x04;
 constexpr uint8_t kTpsRegPowerGood = 0x0F;
+constexpr uint8_t kTpsRegRevision = 0x10;
 constexpr uint8_t kTpsEnableAllRails = 0x3F;
-constexpr uint8_t kTpsPowerGoodMask = 0xFA;
-constexpr uint8_t kTpsPowerGoodExpected = 0xFA;
+constexpr uint8_t kTpsVcom2Reserved = 0x04;
+// The PWR_GOOD pin covers these four panel rails. VB/VN status bits are kept
+// in diagnostics, but must not turn a valid panel-ready indication into a timeout.
+constexpr uint8_t kTpsPanelRailsMask = 0x5A;
+constexpr int kTpsWakeupReadyDelayMs = 2;
 constexpr int kPowerGoodTimeoutMs = 400;
+constexpr int kPowerDownTimeoutMs = 150;
 
 i2c_master_dev_handle_t s_tps = nullptr;
 
@@ -85,6 +92,61 @@ esp_err_t tps_read_u8(uint8_t reg, uint8_t *value)
     return i2c_master_transmit_receive(s_tps, &reg, 1, value, 1, 100);
 }
 
+esp_err_t verify_tps_identity()
+{
+    uint8_t revision = 0;
+    ESP_RETURN_ON_ERROR(tps_read_u8(kTpsRegRevision, &revision), kTag,
+                        "read TPS65185x REVID failed");
+
+    const bool supported = revision == 0x45 || revision == 0x55 ||
+                           revision == 0x65 || revision == 0x66;
+    ESP_RETURN_ON_FALSE(
+        supported, ESP_ERR_INVALID_RESPONSE, kTag,
+        "TPS65185x identity invalid at I2C 0x%02X: REVID=0x%02X; "
+        "check U6 power/WAKEUP and 0x68 address collisions",
+        T5_BOARD_I2C_ADDR_TPS651851, revision);
+
+    ESP_LOGI(kTag, "TPS65185x detected at 0x%02X, REVID=0x%02X",
+             T5_BOARD_I2C_ADDR_TPS651851, revision);
+    return ESP_OK;
+}
+
+void log_tps_power_state(const char *stage)
+{
+    uint8_t enable = 0;
+    uint8_t vcom1 = 0;
+    uint8_t vcom2 = 0;
+    uint8_t power_good = 0;
+    uint8_t revision = 0;
+    esp_err_t err = tps_read_u8(kTpsRegEnable, &enable);
+    if (err == ESP_OK) {
+        err = tps_read_u8(kTpsRegVcom1, &vcom1);
+    }
+    if (err == ESP_OK) {
+        err = tps_read_u8(kTpsRegVcom2, &vcom2);
+    }
+    if (err == ESP_OK) {
+        err = tps_read_u8(kTpsRegPowerGood, &power_good);
+    }
+    if (err == ESP_OK) {
+        err = tps_read_u8(kTpsRegRevision, &revision);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "TPS %s state read failed: %s", stage, esp_err_to_name(err));
+        return;
+    }
+
+    const int vcom_mv = -10 * (vcom1 | ((vcom2 & 0x01U) << 8));
+    ESP_LOGI(kTag,
+             "TPS %s: ENABLE=0x%02X VCOM1=0x%02X VCOM2=0x%02X (%d mV) "
+             "PG=0x%02X [VB=%u VDDH=%u VN=%u VPOS=%u VEE=%u VNEG=%u] REVID=0x%02X",
+             stage, enable, vcom1, vcom2, vcom_mv, power_good,
+             (power_good >> 7) & 1U, (power_good >> 6) & 1U,
+             (power_good >> 5) & 1U, (power_good >> 4) & 1U,
+             (power_good >> 3) & 1U, (power_good >> 1) & 1U,
+             revision);
+}
+
 void log_heap(const char *stage)
 {
     ESP_LOGI(kTag, "%s heap: internal=%u psram=%u",
@@ -122,16 +184,31 @@ public:
         if (_pwr_on == power_on) {
             return true;
         }
+        if (power_on && power_fault_) {
+            return false;
+        }
 
         wait();
         const esp_err_t err = power_on ? power_on_sequence() : power_off_sequence();
         if (err != ESP_OK) {
             ESP_LOGE(kTag, "EPD power %s failed: %s", power_on ? "on" : "off", esp_err_to_name(err));
+            if (power_on) {
+                power_fault_ = true;
+                const esp_err_t cleanup_err = power_off_sequence();
+                if (cleanup_err != ESP_OK) {
+                    ESP_LOGE(kTag, "EPD power failure cleanup failed: %s", esp_err_to_name(cleanup_err));
+                }
+            }
             return false;
         }
 
         _pwr_on = power_on;
         return true;
+    }
+
+    bool powerFault() const
+    {
+        return power_fault_;
     }
 
 private:
@@ -154,52 +231,81 @@ private:
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t wait_tps_power_good()
+    esp_err_t wait_tps_panel_power_good()
     {
+        uint8_t pg = 0;
         for (int i = 0; i < kPowerGoodTimeoutMs; ++i) {
-            uint8_t pg = 0;
             ESP_RETURN_ON_ERROR(tps_read_u8(kTpsRegPowerGood, &pg), kTag, "read TPS PG failed");
-            if ((pg & kTpsPowerGoodMask) == kTpsPowerGoodExpected) {
+            if ((pg & kTpsPanelRailsMask) == kTpsPanelRailsMask) {
                 return ESP_OK;
             }
             vTaskDelay(pdMS_TO_TICKS(1));
         }
+        ESP_LOGE(kTag, "TPS panel rails timeout: PG=0x%02X missing=0x%02X",
+                 pg, kTpsPanelRailsMask & static_cast<uint8_t>(~pg));
+        log_tps_power_state("power-on-timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t wait_tps_panel_power_down()
+    {
+        uint8_t pg = 0;
+        for (int i = 0; i < kPowerDownTimeoutMs; ++i) {
+            ESP_RETURN_ON_ERROR(tps_read_u8(kTpsRegPowerGood, &pg), kTag, "read TPS PG failed");
+            if ((pg & kTpsPanelRailsMask) == 0) {
+                return ESP_OK;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        ESP_LOGW(kTag, "TPS panel rails remained on during power-down: PG=0x%02X", pg);
         return ESP_ERR_TIMEOUT;
     }
 
     esp_err_t power_on_sequence()
     {
-        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_EPD_OE, true), kTag, "set EPD OE failed");
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_EPD_OE, false), kTag, "disable EPD OE failed");
         ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_EPD_MODE, true), kTag, "set EPD MODE failed");
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_TPS_PWRUP, false), kTag, "clear TPS PWRUP failed");
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_VCOM_CTRL, false), kTag, "clear VCOM CTRL failed");
         ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_TPS_WAKEUP, true), kTag, "set TPS WAKEUP failed");
-        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_TPS_PWRUP, true), kTag, "set TPS PWRUP failed");
-        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_VCOM_CTRL, true), kTag, "set VCOM CTRL failed");
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // TPS65185x requires at least 1.8 ms from WAKEUP rising to the first I2C transaction.
+        vTaskDelay(pdMS_TO_TICKS(kTpsWakeupReadyDelayMs));
+        ESP_RETURN_ON_ERROR(verify_tps_identity(), kTag, "TPS65185x identity check failed");
 
-        ESP_RETURN_ON_ERROR(wait_pca_power_good(), kTag, "PCA TPS PWR_GOOD timeout");
-        ESP_RETURN_ON_ERROR(tps_write_u8(kTpsRegEnable, kTpsEnableAllRails), kTag, "enable TPS rails failed");
-
-        const int vcom = std::clamp(kVcomMillivolts / -10, 0, 0xFFFF);
+        const int vcom = std::clamp(kVcomMillivolts / -10, 0, 0x01FF);
         const uint8_t vcom_data[2] = {
             static_cast<uint8_t>(vcom & 0xFF),
-            static_cast<uint8_t>((vcom >> 8) & 0xFF),
+            static_cast<uint8_t>(((vcom >> 8) & 0x01) | kTpsVcom2Reserved),
         };
-        ESP_RETURN_ON_ERROR(tps_write(kTpsRegVcom, vcom_data, sizeof(vcom_data)), kTag, "set TPS VCOM failed");
-        ESP_RETURN_ON_ERROR(wait_tps_power_good(), kTag, "TPS PG timeout");
+        ESP_RETURN_ON_ERROR(tps_write(kTpsRegVcom1, vcom_data, sizeof(vcom_data)), kTag, "set TPS VCOM failed");
+        ESP_RETURN_ON_ERROR(tps_write_u8(kTpsRegEnable, kTpsEnableAllRails), kTag, "enable TPS rails failed");
+
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_TPS_PWRUP, true), kTag, "set TPS PWRUP failed");
+        ESP_RETURN_ON_ERROR(wait_pca_power_good(), kTag, "PCA TPS PWR_GOOD timeout");
+        ESP_RETURN_ON_ERROR(wait_tps_panel_power_good(), kTag, "TPS panel rails timeout");
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_VCOM_CTRL, true), kTag, "set VCOM CTRL failed");
+        vTaskDelay(pdMS_TO_TICKS(1));
+        ESP_RETURN_ON_ERROR(set_expander(T5_BOARD_PCA_IO_EPD_OE, true), kTag, "enable EPD OE failed");
+        log_tps_power_state("rails-ready");
         return ESP_OK;
     }
 
     esp_err_t power_off_sequence()
     {
-        esp_err_t err = ESP_OK;
-        err |= set_expander(T5_BOARD_PCA_IO_EPD_OE, false);
-        err |= set_expander(T5_BOARD_PCA_IO_EPD_MODE, false);
-        err |= set_expander(T5_BOARD_PCA_IO_TPS_PWRUP, false);
+        esp_err_t err = set_expander(T5_BOARD_PCA_IO_EPD_OE, false);
+        esp_rom_delay_us(20);
         err |= set_expander(T5_BOARD_PCA_IO_VCOM_CTRL, false);
-        vTaskDelay(pdMS_TO_TICKS(1));
+        err |= set_expander(T5_BOARD_PCA_IO_TPS_PWRUP, false);
+        err |= set_expander(T5_BOARD_PCA_IO_EPD_MODE, false);
+        const esp_err_t down_err = wait_tps_panel_power_down();
+        if (down_err != ESP_OK && down_err != ESP_ERR_TIMEOUT) {
+            err |= down_err;
+        }
         err |= set_expander(T5_BOARD_PCA_IO_TPS_WAKEUP, false);
         return err;
     }
+
+    volatile bool power_fault_ = false;
 };
 
 class T5P4M5GFX : public lgfx::LGFX_Device {
@@ -245,6 +351,16 @@ public:
         panel_.config_detail(detail);
 
         setPanel(&panel_);
+    }
+
+    bool prepareRefresh()
+    {
+        return bus_.powerControl(true);
+    }
+
+    bool powerFault() const
+    {
+        return bus_.powerFault();
     }
 
 private:
@@ -332,10 +448,19 @@ extern "C" void app_main(void)
 
     log_heap("after init");
     draw_test_pattern();
+    if (!display.prepareRefresh()) {
+        ESP_LOGE(kTag, "EPD power preflight failed; refresh aborted");
+        return;
+    }
     display.display();
     display.waitDisplay();
+    const bool power_fault = display.powerFault();
     display.powerSaveOn();
     log_heap("after refresh");
 
+    if (power_fault) {
+        ESP_LOGE(kTag, "EPD refresh aborted because the power controller faulted");
+        return;
+    }
     ESP_LOGI(kTag, "test pattern rendered");
 }
