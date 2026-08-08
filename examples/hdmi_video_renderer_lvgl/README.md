@@ -4,6 +4,8 @@
 
 This example drives an HDMI monitor with an `LVGL` demo instead of video playback. It allocates a full-screen LVGL draw buffer in PSRAM, converts the output to RGB888, and flushes frames through the LT8912B HDMI path.
 
+The startup path submits a diagnostic frame immediately after display initialization, then starts LVGL without resetting the LT8912B MIPI receiver or adding a fixed delay. Keeping the video timing continuous avoids forcing slower HDMI monitors to detect the input a second time before the demo appears.
+
 ## Prerequisites
 
 - A LilyGo T5-P4 board configured for HDMI output.
