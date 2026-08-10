@@ -101,6 +101,7 @@ static bool s_xl9555_initialized;
 static bool s_sdspi_initialized;
 static bool s_hdmi_powered;
 static bool s_hdmi_int_gpio_configured;
+static bool s_c6_reset_gpio_configured;
 static bool s_frontlight_initialized;
 
 static i2c_master_bus_handle_t s_i2c_handle;
@@ -291,7 +292,7 @@ static void log_hdmi_power_debug_state(const char *stage)
              s_xl_output_state[0], s_xl_output_state[1],
              s_xl_config_state[0], s_xl_config_state[1],
              inputs[0], inputs[1],
-             (xl_ret == ESP_OK) ? get_cached_level(inputs, T5_BOARD_XL_IO_HDMI_ENABLE) : -1,
+             (xl_ret == ESP_OK) ? get_cached_level(inputs, T5_BOARD_XL_IO_HDMI_POWER_ENABLE) : -1,
              (xl_ret == ESP_OK) ? get_cached_level(inputs, T5_BOARD_XL_IO_HDMI_RESET) : -1,
              hdmi_int_level);
 }
@@ -481,6 +482,11 @@ esp_err_t t5_board_xl9555_init(void)
     s_xl_output_state[1] = BIT3;
     s_xl_config_state[0] = BIT5;
     s_xl_config_state[1] = BIT2 | BIT5 | BIT6 | BIT7;
+
+    // s_xl_output_state[0] = 0;
+    // s_xl_output_state[1] = 0;
+    // s_xl_config_state[0] = BIT5 | BIT6 | BIT7;
+    // s_xl_config_state[1] = 0xFF;
 
     ESP_RETURN_ON_ERROR(xl9555_write_cached_state(), TAG, "Initialize XL9555 state failed");
     s_xl9555_initialized = true;
@@ -680,12 +686,13 @@ void t5_board_touch_delete(esp_lcd_touch_handle_t touch, esp_lcd_panel_io_handle
 
 esp_err_t t5_board_audio_select_speaker(bool speaker_enabled)
 {
-    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SEL, !speaker_enabled);
+    (void)speaker_enabled;
+    return ESP_OK;
 }
 
 esp_err_t t5_board_audio_amp_enable(bool enable)
 {
-    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_SHUTDOWN, enable), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_AUDIO_ENABLE, enable), TAG,
                         "Set audio amp state failed");
     vTaskDelay(pdMS_TO_TICKS(AUDIO_AMP_STABLE_DELAY_MS));
     return ESP_OK;
@@ -698,7 +705,7 @@ esp_err_t t5_board_hdmi_power_on(void)
     }
 
     ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
-    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_ENABLE, true), TAG,
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_POWER_ENABLE, true), TAG,
                         "Enable HDMI bridge failed");
     vTaskDelay(pdMS_TO_TICKS(HDMI_ENABLE_DELAY_MS));
 
@@ -727,7 +734,7 @@ esp_err_t t5_board_hdmi_power_off(void)
     }
 
     BSP_ERROR_CHECK_RETURN_ERR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_RESET, false));
-    BSP_ERROR_CHECK_RETURN_ERR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_ENABLE, false));
+    BSP_ERROR_CHECK_RETURN_ERR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_HDMI_POWER_ENABLE, false));
     s_hdmi_powered = false;
     log_hdmi_power_debug_state("after-power-off");
     return ESP_OK;
@@ -922,17 +929,28 @@ static esp_err_t lt8912b_enable_test_pattern(esp_lcd_panel_io_handle_t io_cec,
 
 esp_err_t t5_board_c6_set_reset(bool enable)
 {
-    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_C6_RESET, enable);
+    if (!s_c6_reset_gpio_configured) {
+        gpio_config_t io_conf = {
+            .pin_bit_mask = 1ULL << T5_BOARD_C6_HOST_RESET_GPIO,
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Configure C6 reset GPIO failed");
+        s_c6_reset_gpio_configured = true;
+    }
+    return gpio_set_level(T5_BOARD_C6_HOST_RESET_GPIO, enable);
 }
 
 esp_err_t t5_board_c6_set_wakeup(bool enable)
 {
-    return t5_board_xl9555_set_level(T5_BOARD_XL_IO_C6_WAKEUP, enable);
+    (void)enable;
+    return ESP_OK;
 }
 
 esp_err_t t5_board_c6_bootstrap(void)
 {
-    ESP_RETURN_ON_ERROR(t5_board_xl9555_init(), TAG, "XL9555 init failed");
     ESP_RETURN_ON_ERROR(t5_board_c6_set_wakeup(false), TAG, "Drive C6 WAKEUP low failed");
     ESP_RETURN_ON_ERROR(t5_board_c6_set_reset(false), TAG, "Assert C6 reset failed");
     vTaskDelay(pdMS_TO_TICKS(C6_RESET_LOW_DELAY_MS));
@@ -1163,6 +1181,8 @@ esp_err_t bsp_sdcard_sdspi_mount(bsp_sdcard_cfg_t *cfg)
         return ESP_OK;
     }
 
+    ESP_RETURN_ON_ERROR(t5_board_xl9555_set_level(T5_BOARD_XL_IO_SD_POWER_ENABLE, true), TAG,
+                        "Enable SD card power failed");
     ESP_LOGI(TAG, "Initializing SD card over SPI at %s", BSP_SD_MOUNT_POINT);
     ESP_LOGI(TAG, "SD SPI pins: MISO=%d CLK=%d MOSI=%d CS=%d",
              BSP_SD_SPI_MISO, BSP_SD_SPI_CLK, BSP_SD_SPI_MOSI, BSP_SD_SPI_CS);

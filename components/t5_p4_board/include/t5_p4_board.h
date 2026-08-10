@@ -25,7 +25,7 @@ extern "C" {
 #define T5_BOARD_TOUCH_INT_GPIO          GPIO_NUM_3
 #define T5_BOARD_HDMI_INT_GPIO           GPIO_NUM_4
 #define T5_BOARD_PCA9535_INT_GPIO        GPIO_NUM_5
-#define T5_BOARD_XL9555_INT_GPIO         GPIO_NUM_6
+#define T5_BOARD_SENSOR_INT_GPIO         GPIO_NUM_6
 
 #define T5_BOARD_SD_MISO                 GPIO_NUM_44
 #define T5_BOARD_SD_SCK                  GPIO_NUM_45
@@ -38,7 +38,7 @@ extern "C" {
 #define T5_BOARD_EPD_LEH                 GPIO_NUM_26
 #define T5_BOARD_EPD_STV                 GPIO_NUM_48
 #define T5_BOARD_FRONTLIGHT_LED1         GPIO_NUM_53
-#define T5_BOARD_FRONTLIGHT_LED2         GPIO_NUM_NC
+#define T5_BOARD_FRONTLIGHT_LED2         GPIO_NUM_52
 
 #define T5_BOARD_ES8311_MCLK             GPIO_NUM_43
 #define T5_BOARD_ES8311_BCLK             GPIO_NUM_42
@@ -63,18 +63,11 @@ extern "C" {
 #define T5_BOARD_I2C_ADDR_LT8912B_AVI    (0x4A)
 #define T5_BOARD_I2C_ADDR_TPS651851      (0x68)
 
-#define T5_BOARD_XL_IO_TOUCH_RESET       (0)
-#define T5_BOARD_XL_IO_CC_SW0            (1)
-#define T5_BOARD_XL_IO_CC_SW1            (2)
-#define T5_BOARD_XL_IO_LR_RESET          (3)
-#define T5_BOARD_XL_IO_NRF_CE            (4)
-#define T5_BOARD_XL_IO_AUDIO_SHUTDOWN    (6)
-#define T5_BOARD_XL_IO_AUDIO_SEL         (7)
-#define T5_BOARD_XL_IO_HDMI_RESET        (8)
-#define T5_BOARD_XL_IO_HDMI_ENABLE       (9)
-#define T5_BOARD_XL_IO_SENSOR_IRQ        (10)
-#define T5_BOARD_XL_IO_C6_RESET          (11)
-#define T5_BOARD_XL_IO_C6_WAKEUP         (12)
+#define T5_BOARD_XL_IO_HDMI_RESET        (0)
+#define T5_BOARD_XL_IO_HDMI_POWER_ENABLE (1)
+#define T5_BOARD_XL_IO_TOUCH_RESET       (2)
+#define T5_BOARD_XL_IO_SD_POWER_ENABLE   (3)
+#define T5_BOARD_XL_IO_AUDIO_ENABLE      (4)
 
 #define T5_BOARD_PCA_IO_EPD_OE           (8)
 #define T5_BOARD_PCA_IO_EPD_MODE         (9)
