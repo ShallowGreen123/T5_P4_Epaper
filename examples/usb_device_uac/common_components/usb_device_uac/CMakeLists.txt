@@ -19,7 +19,7 @@ if(NOT CONFIG_USB_DEVICE_UAC_AS_PART)
 
     idf_component_get_property(tusb_lib ${tinyusb_name} COMPONENT_LIB)
     target_include_directories(${tusb_lib} PUBLIC "${COMPONENT_DIR}/tusb" "${COMPONENT_DIR}/tusb_uac")
-    target_sources(${tusb_lib} PUBLIC "${COMPONENT_DIR}/tusb/usb_descriptors.c")
+    target_sources(${tusb_lib} PRIVATE "${COMPONENT_DIR}/tusb/usb_descriptors.c")
 endif()
 
 include(package_manager)

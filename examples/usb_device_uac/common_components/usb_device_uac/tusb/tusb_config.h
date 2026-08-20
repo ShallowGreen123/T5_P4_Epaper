@@ -31,6 +31,7 @@ extern "C" {
 #endif
 
 #include "sdkconfig.h"
+#include "esp_attr.h"
 #include "uac_config.h"
 #include "uac_descriptors.h"
 #include "tusb_config_uac.h"
@@ -46,6 +47,22 @@ extern "C" {
 #else
 #   define CFG_TUSB_RHPORT0_MODE    OPT_MODE_DEVICE | OPT_MODE_FULL_SPEED
 #   define CONFIG_USB_HS            0
+#endif
+
+// ESP32-P4 OTG2.0 endpoint transfers require the DWC2 DMA/cache setup used by esp_tinyusb.
+#define CFG_TUD_DWC2_SLAVE_ENABLE 1
+
+#ifdef CONFIG_TINYUSB_RHPORT_HS
+#define CFG_TUD_DWC2_DMA_ENABLE 1
+
+#if CONFIG_CACHE_L1_CACHE_LINE_SIZE
+#define CFG_TUD_MEM_DCACHE_ENABLE 1
+#define CFG_TUD_MEM_DCACHE_LINE_SIZE CONFIG_CACHE_L1_CACHE_LINE_SIZE
+#define CFG_TUSB_MEM_SECTION __attribute__((aligned(CONFIG_CACHE_L1_CACHE_LINE_SIZE))) DRAM_ATTR
+#else
+#define CFG_TUD_MEM_CACHE_ENABLE 0
+#define CFG_TUSB_MEM_SECTION __attribute__((aligned(4))) DRAM_ATTR
+#endif
 #endif
 
 //--------------------------------------------------------------------
@@ -68,6 +85,8 @@ extern "C" {
 #ifndef CFG_TUSB_DEBUG
 #define CFG_TUSB_DEBUG        0
 #endif
+
+#define CFG_TUSB_DEBUG_PRINTF esp_rom_printf
 
 #if TU_CHECK_MCU(OPT_MCU_ESP32S2, OPT_MCU_ESP32S3, OPT_MCU_ESP32P4)
 #define CFG_TUSB_OS_INC_PATH    freertos/

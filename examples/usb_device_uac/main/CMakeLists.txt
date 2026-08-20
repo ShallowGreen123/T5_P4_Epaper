@@ -1,3 +1,3 @@
 idf_component_register(SRC_DIRS "."
                        INCLUDE_DIRS "."
-                       REQUIRES t5_p4_board)
+                       REQUIRES bq25896 t5_p4_board)

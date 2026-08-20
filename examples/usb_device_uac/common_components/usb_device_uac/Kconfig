@@ -7,7 +7,7 @@ menu "USB Device UAC Configuration"
 
         config UAC_TUSB_PID
             hex "USB Device PID"
-            default 0x8000
+            default 0x4010
 
         config UAC_TUSB_MANUFACTURER
             string "USB Device Manufacture"

@@ -112,6 +112,7 @@ static sdmmc_card_t *s_sdcard;
 static i2s_chan_handle_t s_i2s_tx_chan;
 static i2s_chan_handle_t s_i2s_rx_chan;
 static const audio_codec_data_if_t *s_i2s_data_if;
+static bool s_audio_use_mclk = true;
 static bsp_lcd_handles_t s_display_handles;
 static esp_ldo_channel_handle_t s_dsi_phy_ldo_chan;
 static uint8_t s_pca_output_state[2];
@@ -478,15 +479,10 @@ esp_err_t t5_board_xl9555_init(void)
         return ret;
     }
 
-    s_xl_output_state[0] = BIT0 | BIT1 | BIT2 | BIT3 | BIT4;
-    s_xl_output_state[1] = BIT3;
-    s_xl_config_state[0] = BIT5;
-    s_xl_config_state[1] = BIT2 | BIT5 | BIT6 | BIT7;
-
-    // s_xl_output_state[0] = 0;
-    // s_xl_output_state[1] = 0;
-    // s_xl_config_state[0] = BIT5 | BIT6 | BIT7;
-    // s_xl_config_state[1] = 0xFF;
+    s_xl_output_state[0] = 0;
+    s_xl_output_state[1] = 0;
+    s_xl_config_state[0] = BIT5 | BIT6 | BIT7;
+    s_xl_config_state[1] = 0xFF;
 
     ESP_RETURN_ON_ERROR(xl9555_write_cached_state(), TAG, "Initialize XL9555 state failed");
     s_xl9555_initialized = true;
@@ -1273,6 +1269,7 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
         .gpio_cfg = BSP_I2S_GPIO_CFG,
     };
     const i2s_std_config_t *cfg = (i2s_config != NULL) ? i2s_config : &default_cfg;
+    s_audio_use_mclk = cfg->gpio_cfg.mclk != I2S_GPIO_UNUSED;
 
     if (s_i2s_tx_chan != NULL) {
         ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_i2s_tx_chan, cfg), TAG, "Init I2S TX failed");
@@ -1294,7 +1291,8 @@ esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
     }
 
     ESP_LOGI(TAG, "I2S prepared: mclk=%d bclk=%d lrck=%d dout=%d din=%d",
-             BSP_I2S_MCLK, BSP_I2S_BCLK, BSP_I2S_LRCK, BSP_I2S_DOUT, BSP_I2S_DIN);
+             cfg->gpio_cfg.mclk, cfg->gpio_cfg.bclk, cfg->gpio_cfg.ws,
+             cfg->gpio_cfg.dout, cfg->gpio_cfg.din);
     return ESP_OK;
 }
 
@@ -1342,7 +1340,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         .pa_pin = -1,
         .pa_reverted = false,
         .master_mode = false,
-        .use_mclk = true,
+        .use_mclk = s_audio_use_mclk,
         .digital_mic = false,
         .invert_mclk = false,
         .invert_sclk = false,
@@ -1403,7 +1401,7 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
         .pa_pin = -1,
         .pa_reverted = false,
         .master_mode = false,
-        .use_mclk = true,
+        .use_mclk = s_audio_use_mclk,
         .digital_mic = false,
         .invert_mclk = false,
         .invert_sclk = false,

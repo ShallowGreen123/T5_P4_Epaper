@@ -24,6 +24,8 @@
  *
  */
 
+#include <string.h>
+
 #include "tusb.h"
 #include "uac_descriptors.h"
 
@@ -60,6 +62,25 @@ uint8_t const *tud_descriptor_device_cb(void)
     return (uint8_t const *)&desc_device;
 }
 
+#if TUD_OPT_HIGH_SPEED
+static tusb_desc_device_qualifier_t const desc_device_qualifier = {
+    .bLength            = sizeof(tusb_desc_device_qualifier_t),
+    .bDescriptorType    = TUSB_DESC_DEVICE_QUALIFIER,
+    .bcdUSB             = 0x0200,
+    .bDeviceClass       = TUSB_CLASS_MISC,
+    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+    .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+    .bNumConfigurations = 0x01,
+    .bReserved          = 0x00,
+};
+
+uint8_t const *tud_descriptor_device_qualifier_cb(void)
+{
+    return (uint8_t const *)&desc_device_qualifier;
+}
+#endif
+
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
@@ -67,13 +88,52 @@ uint8_t const *tud_descriptor_device_cb(void)
 #define EPNUM_AUDIO_OUT   0x01
 #define EPNUM_AUDIO_FB    0x81
 #define EPNUM_AUDIO_IN    0x82
+#define AUDIO_FS_SPK_INTERVAL 1
+#define AUDIO_FS_MIC_INTERVAL 1
+#define AUDIO_HS_SPK_INTERVAL 1
+#define AUDIO_HS_MIC_INTERVAL 4
+#define AUDIO_FS_FEEDBACK_SIZE 4
+#define AUDIO_HS_FEEDBACK_SIZE 4
+
+#if TUD_OPT_HIGH_SPEED
+#define AUDIO_PRIMARY_SPK_INTERVAL AUDIO_HS_SPK_INTERVAL
+#define AUDIO_PRIMARY_MIC_INTERVAL AUDIO_HS_MIC_INTERVAL
+#define AUDIO_PRIMARY_FEEDBACK_SIZE AUDIO_HS_FEEDBACK_SIZE
+#define AUDIO_PRIMARY_EP_OUT_SIZE CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT_HS
+#define AUDIO_PRIMARY_EP_IN_SIZE CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN_HS
+#else
+#define AUDIO_PRIMARY_SPK_INTERVAL AUDIO_FS_SPK_INTERVAL
+#define AUDIO_PRIMARY_MIC_INTERVAL AUDIO_FS_MIC_INTERVAL
+#define AUDIO_PRIMARY_FEEDBACK_SIZE AUDIO_FS_FEEDBACK_SIZE
+#define AUDIO_PRIMARY_EP_OUT_SIZE CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT_FS
+#define AUDIO_PRIMARY_EP_IN_SIZE CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN_FS
+#endif
 
 uint8_t const desc_configuration[] = {
     // Config number, interface count, string index, total length, attribute, power in mA
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     // Interface number, string index, EP Out & EP In address, EP size
-    TUD_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, 4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN, EPNUM_AUDIO_FB),
+    TUD_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, 4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN, EPNUM_AUDIO_FB,
+                         AUDIO_PRIMARY_SPK_INTERVAL, AUDIO_PRIMARY_MIC_INTERVAL,
+                         AUDIO_PRIMARY_FEEDBACK_SIZE, AUDIO_PRIMARY_EP_OUT_SIZE, AUDIO_PRIMARY_EP_IN_SIZE),
 };
+
+TU_VERIFY_STATIC(sizeof(desc_configuration) == CONFIG_TOTAL_LEN, "UAC configuration descriptor length mismatch");
+
+#if TUD_OPT_HIGH_SPEED
+static uint8_t const desc_fs_configuration[] = {
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
+    TUD_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, 4, EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN, EPNUM_AUDIO_FB,
+                         AUDIO_FS_SPK_INTERVAL, AUDIO_FS_MIC_INTERVAL, AUDIO_FS_FEEDBACK_SIZE,
+                         CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT_FS,
+                         CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN_FS),
+};
+
+static uint8_t desc_other_speed_configuration[CONFIG_TOTAL_LEN];
+
+TU_VERIFY_STATIC(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN,
+                 "UAC full-speed configuration descriptor length mismatch");
+#endif
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
@@ -81,8 +141,26 @@ uint8_t const desc_configuration[] = {
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
 {
     (void)index; // for multiple configurations
+#if TUD_OPT_HIGH_SPEED
+    if (tud_speed_get() == TUSB_SPEED_FULL) {
+        return desc_fs_configuration;
+    }
+#endif
     return desc_configuration;
 }
+
+#if TUD_OPT_HIGH_SPEED
+uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index)
+{
+    (void)index;
+    uint8_t const *other_speed = tud_speed_get() == TUSB_SPEED_HIGH
+                                 ? desc_fs_configuration
+                                 : desc_configuration;
+    memcpy(desc_other_speed_configuration, other_speed, sizeof(desc_other_speed_configuration));
+    desc_other_speed_configuration[1] = TUSB_DESC_OTHER_SPEED_CONFIG;
+    return desc_other_speed_configuration;
+}
+#endif
 
 //--------------------------------------------------------------------+
 // String Descriptors

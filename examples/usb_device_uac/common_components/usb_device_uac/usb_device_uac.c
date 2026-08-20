@@ -11,7 +11,6 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_private/usb_phy.h"
-#include "esp_timer.h"
 #include "tusb.h"
 #include "uac_config.h"
 #include "usb_device_uac.h"
@@ -47,13 +46,8 @@ typedef struct {
     uac_device_config_t user_cfg;
     int8_t mute[CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX + 1];         // +1 for master channel 0
     int16_t volume[CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX + 1];      // +1 for master channel 0
-    int16_t mic_buf1[CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ / 2];  // Buffer for microphone data
-    int16_t mic_buf2[CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ / 2];  // Buffer for microphone data
+    int16_t mic_buf[CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ / 2];   // Buffer for microphone data
     int16_t spk_buf[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / 2];  // Buffer for speaker data
-    int16_t *mic_buf_write;                                      // Pointer to the buffer to write to
-    int16_t *mic_buf_read;                                       // Pointer to the buffer to read from
-    int spk_data_size;                                           // Speaker data size received in the last frame
-    int mic_data_size;
     int spk_itf_num;
     int mic_itf_num;
     uint8_t spk_resolution;
@@ -65,25 +59,36 @@ typedef struct {
     size_t mic_bytes_per_ms;
     bool spk_active;
     bool mic_active;
+    bool spk_data_started;
+    bool mic_data_started;
+    volatile uint32_t spk_usb_packet_count;
+    volatile uint16_t spk_usb_packet_size;
 } uac_device_t;
 
 static uac_device_t *s_uac_device = NULL;
-static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-#define UAC_ENTER_CRITICAL()    portENTER_CRITICAL(&s_mux)
-#define UAC_EXIT_CRITICAL()     portEXIT_CRITICAL(&s_mux)
 
-static void usb_phy_init(void)
+#if CFG_TUD_AUDIO_ENABLE_EP_OUT && CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
+static void set_nominal_feedback(void)
 {
-    // Configure USB PHY
+    uint32_t frame_rate = tud_speed_get() == TUSB_SPEED_HIGH ? 8000 : 1000;
+    uint32_t feedback = (uint32_t)(((uint64_t)s_uac_device->current_sample_rate << 16) / frame_rate);
+    tud_audio_n_fb_set(0, feedback);
+}
+#endif
+
+static esp_err_t usb_phy_init(void)
+{
     usb_phy_config_t phy_conf = {
         .controller = USB_PHY_CTRL_OTG,
         .otg_mode = USB_OTG_MODE_DEVICE,
         .target = USB_PHY_TARGET_INT,
 #if CONFIG_TINYUSB_RHPORT_HS
         .otg_speed = USB_PHY_SPEED_HIGH,
+#else
+        .otg_speed = USB_PHY_SPEED_FULL,
 #endif
     };
-    usb_new_phy(&phy_conf, &s_uac_device->phy_hdl);
+    return usb_new_phy(&phy_conf, &s_uac_device->phy_hdl);
 }
 
 static void tusb_device_task(void *arg)
@@ -99,12 +104,17 @@ void tud_mount_cb(void)
 {
     s_uac_device->spk_active = false;
     s_uac_device->mic_active = false;
+#if CFG_TUD_AUDIO_ENABLE_EP_OUT && CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
+    set_nominal_feedback();
+#endif
     ESP_LOGI(TAG, "USB mounted");
 }
 
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
+    s_uac_device->spk_active = false;
+    s_uac_device->mic_active = false;
     ESP_LOGI(TAG, "USB unmounted");
 }
 
@@ -305,7 +315,7 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
     return false;
 }
 
-bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const *p_request)
+bool tud_audio_set_itf_close_ep_cb(uint8_t rhport, tusb_control_request_t const *p_request)
 {
     (void)rhport;
 
@@ -315,16 +325,17 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
     if (s_uac_device->spk_itf_num == itf && alt == 0) {
         TU_LOG2("Speaker interface closed");
-        s_uac_device->spk_data_size = 0;
         s_uac_device->spk_active = false;
+        s_uac_device->spk_data_started = false;
+        xTaskNotifyGive(s_uac_device->spk_task_handle);
     }
 #endif
 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX
     if (s_uac_device->mic_itf_num == itf && alt == 0) {
         TU_LOG2("Microphone interface closed");
-        s_uac_device->mic_data_size = 0;
         s_uac_device->mic_active = false;
+        s_uac_device->mic_data_started = false;
     }
 #endif
 
@@ -341,10 +352,15 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
     if (s_uac_device->spk_itf_num == itf && alt != 0) {
-        s_uac_device->spk_data_size = 0;
         s_uac_device->spk_resolution = spk_resolutions_per_format[alt - 1];
+        s_uac_device->spk_usb_packet_count = 0;
+        s_uac_device->spk_usb_packet_size = 0;
         s_uac_device->spk_active = true;
+        s_uac_device->spk_data_started = false;
         s_uac_device->spk_bytes_per_ms = s_uac_device->current_sample_rate / 1000 * SPEAK_CHANNEL_NUM * s_uac_device->spk_resolution / 8;
+#if CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
+        set_nominal_feedback();
+#endif
         xTaskNotifyGive(s_uac_device->spk_task_handle);
         TU_LOG1("Speaker interface %d-%d opened", itf, alt);
         printf("Speaker interface %d-%d opened\n", itf, alt);
@@ -353,9 +369,9 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX
     if (s_uac_device->mic_itf_num == itf && alt != 0) {
-        s_uac_device->mic_data_size = 0;
         s_uac_device->mic_resolution = mic_resolutions_per_format[alt - 1];
         s_uac_device->mic_active = true;
+        s_uac_device->mic_data_started = false;
         s_uac_device->mic_bytes_per_ms = s_uac_device->current_sample_rate / 1000 * MIC_CHANNEL_NUM * s_uac_device->mic_resolution / 8;
         xTaskNotifyGive(s_uac_device->mic_task_handle);
         TU_LOG1("Microphone interface %d-%d opened", itf, alt);
@@ -366,89 +382,68 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     return true;
 }
 
-bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id, uint8_t ep_out, uint8_t cur_alt_setting)
+#if CFG_TUD_AUDIO_ENABLE_EP_OUT
+bool tud_audio_rx_done_isr(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id,
+                           uint8_t ep_out, uint8_t cur_alt_setting)
 {
     (void)rhport;
     (void)func_id;
     (void)ep_out;
     (void)cur_alt_setting;
 
-    static bool new_play = false;
-    static int64_t last_time = 0;
-    int64_t now = esp_timer_get_time();
-
-    /**
-     * @brief If no data is received for a certain period, it is considered as the initiation
-     *        of a new audio transmission. At this point, the FIFO data is cleared, and a segment
-     *        of data is buffered in the I2S.
-     */
-    if (now - last_time > 100 * CONFIG_UAC_SPK_NEW_PLAY_INTERVAL) {
-        new_play = true;
-        tud_audio_clear_ep_out_ff();
-    }
-    last_time = now;
-
-    int bytes_remained = tud_audio_available();
-
-    size_t bytes_require = s_uac_device->spk_bytes_per_ms;
-
-    if (new_play) {
-        /*!< Buffer a segment of data in the I2S and control the data size to be half of the UAC FIFO size. */
-        bytes_require = SPK_INTERVAL_MS * s_uac_device->spk_bytes_per_ms / 2;
-        if (bytes_remained < bytes_require) {
-            return true;
-        }
-        new_play = false;
-    }
-
-    s_uac_device->spk_data_size = tud_audio_read(s_uac_device->spk_buf, bytes_require);
-    xTaskNotifyGive(s_uac_device->spk_task_handle);
+    s_uac_device->spk_usb_packet_size = n_bytes_received;
+    s_uac_device->spk_usb_packet_count++;
     return true;
 }
-
-bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t itf, uint8_t ep_in, uint8_t cur_alt_setting)
-{
-    (void)rhport;
-    (void)itf;
-    (void)ep_in;
-    (void)cur_alt_setting;
-    size_t bytes_require = MIC_INTERVAL_MS * s_uac_device->mic_bytes_per_ms;
-
-    tu_fifo_t *sw_in_fifo = tud_audio_get_ep_in_ff();
-    uint16_t fifo_remained = tu_fifo_remaining(sw_in_fifo);
-    if (fifo_remained < bytes_require) {
-        return true;
-    }
-
-    // load data chunk by chunk
-    UAC_ENTER_CRITICAL();
-    if (s_uac_device->mic_data_size > 0) {
-        tud_audio_write((void *)s_uac_device->mic_buf_read, s_uac_device->mic_data_size);
-        s_uac_device->mic_data_size = 0;
-    }
-    UAC_EXIT_CRITICAL();
-
-    return true;
-}
+#endif
 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
 static void usb_spk_task(void *pvParam)
 {
+    bool usb_data_logged = false;
+    bool stable_stream_logged = false;
+    TickType_t last_wake_time = xTaskGetTickCount();
+
     while (1) {
-        if (s_uac_device->spk_active == false) {
-            ulTaskNotifyTake(pdFAIL, portMAX_DELAY);
+        if (!s_uac_device->spk_active) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            usb_data_logged = false;
+            stable_stream_logged = false;
+            last_wake_time = xTaskGetTickCount();
             continue;
         }
-        // clear the notification
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (s_uac_device->spk_data_size == 0) {
+
+        if (!usb_data_logged && s_uac_device->spk_usb_packet_count > 0) {
+            usb_data_logged = true;
+            ESP_LOGI(TAG, "Speaker USB packets received: %" PRIu32 ", last packet %u bytes",
+                     s_uac_device->spk_usb_packet_count, s_uac_device->spk_usb_packet_size);
+        }
+        if (!stable_stream_logged && s_uac_device->spk_usb_packet_count >= 1000) {
+            stable_stream_logged = true;
+            ESP_LOGI(TAG, "Speaker stream stable: %" PRIu32 " USB packets received",
+                     s_uac_device->spk_usb_packet_count);
+        }
+
+        size_t bytes_available = tud_audio_available();
+        size_t bytes_required = s_uac_device->spk_bytes_per_ms;
+        if (bytes_available < bytes_required) {
+            vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(1));
             continue;
         }
-        // playback the data from the ring buffer chunk by chunk
+
+        size_t bytes_to_read = MIN(bytes_available, sizeof(s_uac_device->spk_buf));
+        size_t bytes_read = tud_audio_read(s_uac_device->spk_buf, bytes_to_read);
         if (s_uac_device->user_cfg.output_cb) {
-            s_uac_device->user_cfg.output_cb((uint8_t *)s_uac_device->spk_buf, s_uac_device->spk_data_size, s_uac_device->user_cfg.cb_ctx);
+            esp_err_t ret = s_uac_device->user_cfg.output_cb((uint8_t *)s_uac_device->spk_buf, bytes_read,
+                                                             s_uac_device->user_cfg.cb_ctx);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to write speaker data");
+            } else if (!s_uac_device->spk_data_started && bytes_read > 0) {
+                s_uac_device->spk_data_started = true;
+                ESP_LOGI(TAG, "Speaker data flowing: %u-byte first block", (unsigned)bytes_read);
+            }
         }
-        s_uac_device->spk_data_size = 0;
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(1));
     }
 }
 #endif
@@ -469,17 +464,21 @@ static void usb_mic_task(void *pvParam)
         size_t bytes_require = MIC_INTERVAL_MS * s_uac_device->mic_bytes_per_ms;
         if (s_uac_device->user_cfg.input_cb) {
             size_t bytes_read = 0;
-            esp_err_t ret = s_uac_device->user_cfg.input_cb((uint8_t *)s_uac_device->mic_buf_write, bytes_require, &bytes_read, s_uac_device->user_cfg.cb_ctx);
+            esp_err_t ret = s_uac_device->user_cfg.input_cb((uint8_t *)s_uac_device->mic_buf, bytes_require,
+                                                            &bytes_read, s_uac_device->user_cfg.cb_ctx);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to read data from mic");
                 continue;
             }
-            int16_t *tmp_buf = s_uac_device->mic_buf_write;
-            UAC_ENTER_CRITICAL();
-            s_uac_device->mic_buf_write = s_uac_device->mic_buf_read;
-            s_uac_device->mic_buf_read = tmp_buf;
-            s_uac_device->mic_data_size = bytes_read;
-            UAC_EXIT_CRITICAL();
+            size_t bytes_written = tud_audio_write(s_uac_device->mic_buf, bytes_read);
+            if (bytes_written != bytes_read) {
+                ESP_LOGD(TAG, "Microphone USB FIFO full: wrote %u of %u bytes",
+                         (unsigned)bytes_written, (unsigned)bytes_read);
+            }
+            if (!s_uac_device->mic_data_started && bytes_written > 0) {
+                s_uac_device->mic_data_started = true;
+                ESP_LOGI(TAG, "Microphone data flowing: %u-byte first block", (unsigned)bytes_written);
+            }
         }
 
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(MIC_INTERVAL_MS));
@@ -502,8 +501,6 @@ esp_err_t uac_device_init(uac_device_config_t *config)
     s_uac_device->user_cfg.set_mute_cb = config->set_mute_cb;
     s_uac_device->user_cfg.set_volume_cb = config->set_volume_cb;
     s_uac_device->current_sample_rate = DEFAULT_SAMPLE_RATE;
-    s_uac_device->mic_buf_write = s_uac_device->mic_buf1;
-    s_uac_device->mic_buf_read = s_uac_device->mic_buf2;
 
 #if CONFIG_USB_DEVICE_UAC_AS_PART
     s_uac_device->spk_itf_num = config->spk_itf_num;
@@ -519,15 +516,14 @@ esp_err_t uac_device_init(uac_device_config_t *config)
 
     BaseType_t ret_val;
     if (!config->skip_tinyusb_init) {
-        usb_phy_init();
+        ESP_RETURN_ON_ERROR(usb_phy_init(), TAG, "USB PHY init failed");
         bool usb_init = tusb_init();
         if (!usb_init) {
             ESP_LOGE(TAG, "USB Device Stack Init Fail");
             return ESP_FAIL;
         }
-        ret_val = xTaskCreatePinnedToCore(tusb_device_task, "TinyUSB", 4096, NULL, CONFIG_UAC_TINYUSB_TASK_PRIORITY,
-                                          NULL, CONFIG_UAC_TINYUSB_TASK_CORE == -1 ? tskNO_AFFINITY : CONFIG_UAC_TINYUSB_TASK_CORE);
-        ESP_RETURN_ON_FALSE(ret_val == pdPASS, ESP_FAIL, TAG, "Failed to create TinyUSB task");
+
+        tud_disconnect();
     }
 
 #if CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX
@@ -541,6 +537,17 @@ esp_err_t uac_device_init(uac_device_config_t *config)
                                       &s_uac_device->spk_task_handle, CONFIG_UAC_SPK_TASK_CORE == -1 ? tskNO_AFFINITY : CONFIG_UAC_SPK_TASK_CORE);
     ESP_RETURN_ON_FALSE(ret_val == pdPASS, ESP_FAIL, TAG, "Failed to create usb_spk task");
 #endif
+
+    if (!config->skip_tinyusb_init) {
+        // A CPU reset does not electrically detach the OTG port. Start the
+        // event task while disconnected, then present a clean attach after
+        // the host has had enough time to discard any failed enumeration.
+        ret_val = xTaskCreatePinnedToCore(tusb_device_task, "TinyUSB", 4096, NULL, CONFIG_UAC_TINYUSB_TASK_PRIORITY,
+                                          NULL, CONFIG_UAC_TINYUSB_TASK_CORE == -1 ? tskNO_AFFINITY : CONFIG_UAC_TINYUSB_TASK_CORE);
+        ESP_RETURN_ON_FALSE(ret_val == pdPASS, ESP_FAIL, TAG, "Failed to create TinyUSB task");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        tud_connect();
+    }
 
     ESP_LOGI(TAG, "UAC Device Start, Version: %d.%d.%d", USB_DEVICE_UAC_VER_MAJOR, USB_DEVICE_UAC_VER_MINOR, USB_DEVICE_UAC_VER_PATCH);
     return ESP_OK;
