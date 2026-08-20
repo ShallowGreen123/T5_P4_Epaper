@@ -12,7 +12,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
@@ -28,6 +31,19 @@
 #define SD_TEST_FALLBACK_FILE_NAME "sdtest.txt"
 #define SD_TEST_SPEED_FALLBACK_FILE_NAME "sdbench.bin"
 
+#define BOARD_I2C_PORT I2C_NUM_0
+#define BOARD_I2C_SDA_GPIO GPIO_NUM_7
+#define BOARD_I2C_SCL_GPIO GPIO_NUM_8
+#define BOARD_I2C_FREQ_HZ 400000
+#define XL9555_I2C_ADDRESS 0x22
+#define XL9555_INPUT_PORT_0_REG 0x00
+#define XL9555_OUTPUT_PORT_0_REG 0x02
+#define XL9555_CONFIG_PORT_0_REG 0x06
+#define PIN_XL9555_SD_VDD_EN 3
+#define XL9555_SD_VDD_EN_MASK (1U << PIN_XL9555_SD_VDD_EN)
+#define XL9555_I2C_TIMEOUT_MS 100
+#define SD_POWER_STABLE_DELAY_MS 20
+
 #ifndef CONFIG_SD_CARD_TEST_SPEED_FILE_NAME
 #define CONFIG_SD_CARD_TEST_SPEED_FILE_NAME SD_TEST_SPEED_FALLBACK_FILE_NAME
 #endif
@@ -41,6 +57,116 @@
 #endif
 
 static const char *TAG = "sd_card_test";
+
+static esp_err_t xl9555_read_register(i2c_master_dev_handle_t device, uint8_t reg, uint8_t *value)
+{
+    return i2c_master_transmit_receive(device, &reg, sizeof(reg), value, sizeof(*value),
+                                       XL9555_I2C_TIMEOUT_MS);
+}
+
+static esp_err_t xl9555_write_register(i2c_master_dev_handle_t device, uint8_t reg, uint8_t value)
+{
+    const uint8_t data[] = {reg, value};
+    return i2c_master_transmit(device, data, sizeof(data), XL9555_I2C_TIMEOUT_MS);
+}
+
+static esp_err_t enable_sd_card_power(void)
+{
+    i2c_master_bus_handle_t bus = NULL;
+    i2c_master_dev_handle_t device = NULL;
+    uint8_t output_port_0 = 0;
+    uint8_t config_port_0 = 0;
+    uint8_t input_port_0 = 0;
+    esp_err_t ret;
+
+    ESP_LOGI(TAG, "Enabling SD card power through XL9555 P03 (SD_VDD_EN)");
+
+    const i2c_master_bus_config_t bus_config = {
+        .i2c_port = BOARD_I2C_PORT,
+        .sda_io_num = BOARD_I2C_SDA_GPIO,
+        .scl_io_num = BOARD_I2C_SCL_GPIO,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    ret = i2c_new_master_bus(&bus_config, &bus);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize board I2C bus: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    const i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = XL9555_I2C_ADDRESS,
+        .scl_speed_hz = BOARD_I2C_FREQ_HZ,
+    };
+    ret = i2c_master_bus_add_device(bus, &device_config, &device);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add XL9555 to I2C bus: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ret = i2c_master_probe(bus, XL9555_I2C_ADDRESS, XL9555_I2C_TIMEOUT_MS);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "XL9555 was not detected at 0x%02X: %s", XL9555_I2C_ADDRESS, esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ret = xl9555_read_register(device, XL9555_OUTPUT_PORT_0_REG, &output_port_0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read XL9555 output port 0: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+    ret = xl9555_read_register(device, XL9555_CONFIG_PORT_0_REG, &config_port_0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read XL9555 config port 0: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    // Set the output latch before changing P03 to output, avoiding a low pulse on SD_VDD_EN.
+    output_port_0 |= XL9555_SD_VDD_EN_MASK;
+    ret = xl9555_write_register(device, XL9555_OUTPUT_PORT_0_REG, output_port_0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set XL9555 SD_VDD_EN output: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+    config_port_0 &= (uint8_t)~XL9555_SD_VDD_EN_MASK;
+    ret = xl9555_write_register(device, XL9555_CONFIG_PORT_0_REG, config_port_0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure XL9555 SD_VDD_EN as output: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ret = xl9555_read_register(device, XL9555_INPUT_PORT_0_REG, &input_port_0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read back XL9555 input port 0: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+    if ((input_port_0 & XL9555_SD_VDD_EN_MASK) == 0) {
+        ESP_LOGE(TAG, "XL9555 P03 did not reach the active-high level");
+        ret = ESP_ERR_INVALID_STATE;
+        goto cleanup;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(SD_POWER_STABLE_DELAY_MS));
+    ESP_LOGI(TAG, "SD card power is enabled and stable (XL9555 port 0: out=0x%02X dir=0x%02X in=0x%02X)",
+             output_port_0, config_port_0, input_port_0);
+
+cleanup:
+    if (device != NULL) {
+        esp_err_t cleanup_ret = i2c_master_bus_rm_device(device);
+        if (ret == ESP_OK && cleanup_ret != ESP_OK) {
+            ret = cleanup_ret;
+        }
+    }
+    if (bus != NULL) {
+        esp_err_t cleanup_ret = i2c_del_master_bus(bus);
+        if (ret == ESP_OK && cleanup_ret != ESP_OK) {
+            ret = cleanup_ret;
+        }
+    }
+    return ret;
+}
 
 static const char *card_type_to_string(const sdmmc_card_t *card)
 {
@@ -398,6 +524,12 @@ void app_main(void)
     ESP_LOGI(TAG, "Pins: MISO=%d MOSI=%d CLK=%d CS=%d",
              CONFIG_SD_CARD_TEST_PIN_MISO, CONFIG_SD_CARD_TEST_PIN_MOSI,
              CONFIG_SD_CARD_TEST_PIN_CLK, CONFIG_SD_CARD_TEST_PIN_CS);
+
+    ret = enable_sd_card_power();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start SD card test without SD_VDD power: %s", esp_err_to_name(ret));
+        return;
+    }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.max_freq_khz = CONFIG_SD_CARD_TEST_MAX_FREQ_KHZ;

@@ -6,6 +6,7 @@ idf_component_register(
         sdmmc
         esp_timer
         esp_driver_gpio
+        esp_driver_i2c
         esp_driver_spi
         esp_driver_sdspi
 )
