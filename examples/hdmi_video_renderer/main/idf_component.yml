@@ -2,5 +2,6 @@ dependencies:
   idf: ">=5.4"
 
   espressif/esp_audio_codec:
-    version: "^2.3.0"
+    # v2.6+ requires ESP32-P4 revision 3.0; T5-P4 V0.3 uses an earlier P4.
+    version: ">=2.3.0,<2.6.0"
     public: true
