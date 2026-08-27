@@ -35,6 +35,10 @@ static const char *TAG = "hdmi_lvgl";
 #error "This example requires CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y"
 #endif
 
+#if CONFIG_BSP_LCD_LT8912B_TEST_PATTERN
+#error "Disable CONFIG_BSP_LCD_LT8912B_TEST_PATTERN to display the LVGL demo"
+#endif
+
 #define DISPLAY_OUTPUT_H_RES        BSP_LCD_H_RES
 #define DISPLAY_OUTPUT_V_RES        BSP_LCD_V_RES
 #define DISPLAY_LANE_BITRATE_MBPS   BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS
