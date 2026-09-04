@@ -41,6 +41,8 @@ constexpr battery_profile_t kBatteryProfile = {
     .current_threshold_ma = (int16_t)CONFIG_FACTORY_BATTERY_CURRENT_THRESHOLD_MA,
 };
 
+constexpr uint16_t kOtgVoltageMv = 5000u;
+
 static bq25896_hal_esp_idf_ctx_t s_bq25896_hal_ctx = {};
 static bq25896_t s_bq25896 = {};
 static BQ27220 s_bq27220;
@@ -89,6 +91,22 @@ static bool bq25896_apply_step(const char *step_name, bq25896_err_t err)
     }
 
     return true;
+}
+
+static bool charger_has_external_vbus(const bq25896_status_t &status)
+{
+    return status.vbus_status != BQ25896_VBUS_STATUS_OTG &&
+           (status.vbus_good || status.power_good);
+}
+
+static void restore_normal_power_path_after_otg_error()
+{
+    if (!bq25896_apply_step("disable_otg", bq25896_disable_otg(&s_bq25896))) {
+        return;
+    }
+
+    (void)bq25896_apply_step("enable_battery_power_path", bq25896_enable_battery_power_path(&s_bq25896));
+    (void)bq25896_apply_step("enable_charge", bq25896_enable_charge(&s_bq25896));
 }
 
 static void set_status_text(const char *text)
@@ -243,7 +261,7 @@ static void update_status_text_from_state()
         return;
     }
 
-    const char *power_path = s_state.vbus_connected ? "USB in" : "Battery only";
+    const char *power_path = s_state.otg_active ? "USB OTG" : (s_state.vbus_connected ? "USB in" : "Battery only");
 
     if (s_state.charger_ready && s_state.gauge_ready) {
         if (s_state.charger_read_ok && s_state.gauge_read_ok) {
@@ -290,12 +308,14 @@ extern "C" void factory_battery_refresh(void)
     s_state.gauge_taper_current_ma = kBatteryProfile.termination_current_ma;
 
     bq25896_status_t charger_status = {};
+    bq25896_fault_t charger_fault = {};
     bq25896_adc_t charger_adc = {};
     bq25896_charge_config_t charger_cfg = {};
     BQ27220Snapshot gauge = {};
 
     if (s_bq25896_ready) {
         const bq25896_err_t status_rc = bq25896_read_status(&s_bq25896, &charger_status);
+        const bq25896_err_t fault_rc = bq25896_read_fault(&s_bq25896, &charger_fault);
         const bq25896_err_t adc_rc = bq25896_read_adc(&s_bq25896, &charger_adc);
         const bq25896_err_t cfg_rc = bq25896_read_charge_config(&s_bq25896, &charger_cfg);
 
@@ -303,8 +323,11 @@ extern "C" void factory_battery_refresh(void)
             BQ25896_SUCCEEDED(status_rc) && BQ25896_SUCCEEDED(adc_rc) && BQ25896_SUCCEEDED(cfg_rc);
 
         if (s_state.charger_read_ok) {
-            s_state.vbus_connected = charger_status.vbus_good || charger_status.power_good;
+            s_state.vbus_connected = charger_has_external_vbus(charger_status);
             s_state.charge_enabled = charger_cfg.charge_enabled;
+            s_state.otg_enabled = charger_cfg.otg_enabled;
+            s_state.otg_active = charger_status.vbus_status == BQ25896_VBUS_STATUS_OTG;
+            s_state.boost_fault = BQ25896_SUCCEEDED(fault_rc) && charger_fault.boost_fault;
             s_state.charge_done = charger_status.charge_status == BQ25896_CHARGE_STATUS_TERMINATION_DONE;
             s_state.charger_vbus_status = (uint8_t)charger_status.vbus_status;
             s_state.charger_status = (uint8_t)charger_status.charge_status;
@@ -405,6 +428,72 @@ extern "C" const char *factory_battery_gauge_state_name(uint8_t state)
     }
 }
 
+extern "C" factory_battery_otg_result_t factory_battery_set_otg_enabled(bool enabled)
+{
+    ensure_initialized();
+
+    if (!s_bq25896_ready) {
+        ESP_LOGW(TAG, "OTG request rejected: BQ25896 not ready");
+        return FACTORY_BATTERY_OTG_CHARGER_UNAVAILABLE;
+    }
+
+    if (enabled) {
+        bq25896_status_t charger_status = {};
+        const bq25896_err_t status_rc = bq25896_read_status(&s_bq25896, &charger_status);
+        if (BQ25896_FAILED(status_rc)) {
+            ESP_LOGE(TAG, "OTG request rejected: unable to read charger status: %s", bq25896_err_name(status_rc));
+            return FACTORY_BATTERY_OTG_IO_ERROR;
+        }
+
+        if (charger_has_external_vbus(charger_status)) {
+            ESP_LOGW(TAG, "OTG request rejected: external VBUS is present");
+            factory_battery_refresh();
+            return FACTORY_BATTERY_OTG_EXTERNAL_VBUS_PRESENT;
+        }
+
+        if (!bq25896_apply_step("disable_charge", bq25896_disable_charge(&s_bq25896)) ||
+            !bq25896_apply_step("set_otg_voltage_mv", bq25896_set_otg_voltage_mv(&s_bq25896, kOtgVoltageMv)) ||
+            !bq25896_apply_step("enable_otg", bq25896_enable_otg(&s_bq25896))) {
+            restore_normal_power_path_after_otg_error();
+            factory_battery_refresh();
+            return FACTORY_BATTERY_OTG_IO_ERROR;
+        }
+
+        ESP_LOGI(TAG, "USB OTG boost enabled at %u mV", (unsigned int)kOtgVoltageMv);
+    } else {
+        if (!bq25896_apply_step("disable_otg", bq25896_disable_otg(&s_bq25896))) {
+            factory_battery_refresh();
+            return FACTORY_BATTERY_OTG_IO_ERROR;
+        }
+
+        if (!bq25896_apply_step("enable_battery_power_path", bq25896_enable_battery_power_path(&s_bq25896)) ||
+            !bq25896_apply_step("enable_charge", bq25896_enable_charge(&s_bq25896))) {
+            factory_battery_refresh();
+            return FACTORY_BATTERY_OTG_IO_ERROR;
+        }
+
+        ESP_LOGI(TAG, "USB OTG boost disabled; normal charging restored");
+    }
+
+    factory_battery_refresh();
+    return FACTORY_BATTERY_OTG_OK;
+}
+
+extern "C" const char *factory_battery_otg_result_name(factory_battery_otg_result_t result)
+{
+    switch (result) {
+        case FACTORY_BATTERY_OTG_OK:
+            return "OK";
+        case FACTORY_BATTERY_OTG_CHARGER_UNAVAILABLE:
+            return "BQ25896 unavailable";
+        case FACTORY_BATTERY_OTG_EXTERNAL_VBUS_PRESENT:
+            return "External VBUS detected";
+        case FACTORY_BATTERY_OTG_IO_ERROR:
+        default:
+            return "BQ25896 communication error";
+    }
+}
+
 extern "C" bool factory_battery_shutdown(void)
 {
     ensure_initialized();
@@ -421,7 +510,7 @@ extern "C" bool factory_battery_shutdown(void)
         return false;
     }
 
-    if (charger_status.vbus_good || charger_status.power_good) {
+    if (charger_has_external_vbus(charger_status)) {
         ESP_LOGW(TAG, "Shutdown rejected: VBUS still present");
         return false;
     }

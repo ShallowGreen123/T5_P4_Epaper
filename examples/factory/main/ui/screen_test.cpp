@@ -27,7 +27,7 @@ static void create_test(lv_obj_t *parent)
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-    lv_obj_t *summary = factory_ui_create_info_label(panel, "Display and touch diagnostics are the live hardware pages in this migration build.");
+    lv_obj_t *summary = factory_ui_create_info_label(panel, "Display and touch hardware diagnostics.");
     lv_obj_set_width(summary, lv_pct(100));
 
     lv_obj_t *grid = lv_obj_create(panel);

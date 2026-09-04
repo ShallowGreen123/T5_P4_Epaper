@@ -370,6 +370,7 @@ extern "C" void factory_ui_init(void)
     scr_mgr_register(FACTORY_PAGE_CAMERA, factory_screen_camera_lifecycle());
     scr_mgr_register(FACTORY_PAGE_HDMI, factory_screen_hdmi_lifecycle());
     scr_mgr_register(FACTORY_PAGE_ICM20948, factory_screen_icm20948_lifecycle());
+    scr_mgr_register(FACTORY_PAGE_USB_OTG, factory_screen_usb_otg_lifecycle());
 
     scr_mgr_register(FACTORY_PAGE_CLOCK, factory_placeholder_lifecycle(FACTORY_PAGE_CLOCK));
     scr_mgr_register(FACTORY_PAGE_LORA, factory_placeholder_lifecycle(FACTORY_PAGE_LORA));

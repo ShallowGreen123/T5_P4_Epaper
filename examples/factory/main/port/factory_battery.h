@@ -16,6 +16,9 @@ typedef struct factory_battery_state {
     bool gauge_read_ok;
     bool vbus_connected;
     bool charge_enabled;
+    bool otg_enabled;
+    bool otg_active;
+    bool boost_fault;
     bool charging;
     bool charge_done;
     bool gauge_battery_full_flag;
@@ -48,12 +51,21 @@ typedef struct factory_battery_state {
     uint16_t gauging_status_raw;
 } factory_battery_state_t;
 
+typedef enum factory_battery_otg_result {
+    FACTORY_BATTERY_OTG_OK = 0,
+    FACTORY_BATTERY_OTG_CHARGER_UNAVAILABLE,
+    FACTORY_BATTERY_OTG_EXTERNAL_VBUS_PRESENT,
+    FACTORY_BATTERY_OTG_IO_ERROR,
+} factory_battery_otg_result_t;
+
 void factory_battery_init(void);
 void factory_battery_refresh(void);
 const factory_battery_state_t *factory_battery_get_state(void);
 const char *factory_battery_get_status_text(void);
 const char *factory_battery_charge_status_name(uint8_t status);
 const char *factory_battery_gauge_state_name(uint8_t state);
+factory_battery_otg_result_t factory_battery_set_otg_enabled(bool enabled);
+const char *factory_battery_otg_result_name(factory_battery_otg_result_t result);
 bool factory_battery_shutdown(void);
 void factory_battery_format_temperature(char *buffer, size_t buffer_size, uint16_t temperature_dk);
 

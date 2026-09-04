@@ -25,6 +25,7 @@ idf_component_register(
         esp_timer
         esp_video
         esp_wifi
+        esp_tinyusb
         fastepd
         bq25896
         bq27220
@@ -32,6 +33,7 @@ idf_component_register(
         nvs_flash
         sdmmc
         t5_p4_board
+        usb
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

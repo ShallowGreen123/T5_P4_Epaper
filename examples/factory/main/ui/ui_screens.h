@@ -20,6 +20,7 @@ scr_lifecycle_t *factory_screen_audio_lifecycle(void);
 scr_lifecycle_t *factory_screen_camera_lifecycle(void);
 scr_lifecycle_t *factory_screen_hdmi_lifecycle(void);
 scr_lifecycle_t *factory_screen_icm20948_lifecycle(void);
+scr_lifecycle_t *factory_screen_usb_otg_lifecycle(void);
 scr_lifecycle_t *factory_placeholder_lifecycle(factory_page_id_t page_id);
 
 #ifdef __cplusplus
