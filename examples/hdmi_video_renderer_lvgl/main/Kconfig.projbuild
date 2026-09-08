@@ -1,5 +1,14 @@
 menu "HDMI LVGL Demo Configuration"
 
+    config HDMI_LVGL_DRAW_BUF_LINES
+        int "LVGL partial draw buffer height"
+        default 128
+        range 16 256
+        help
+            Number of display lines in each of the two LVGL draw buffers.
+            Larger values reduce PPA transaction overhead but consume more
+            PSRAM. 128 lines is a balanced default for 1920x1080 output.
+
     choice HDMI_LVGL_DEMO
         prompt "Select LVGL demo"
         default HDMI_LVGL_DEMO_BENCHMARK

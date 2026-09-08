@@ -6,11 +6,12 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "driver/ppa.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_lt8912b.h"
@@ -45,32 +46,70 @@ static const char *TAG = "hdmi_lvgl";
 #define DISPLAY_PIXEL_COUNT         ((uint32_t)(DISPLAY_OUTPUT_H_RES * DISPLAY_OUTPUT_V_RES))
 #define HDMI_RGB888_BYTES_PER_PIXEL 3U
 #define HDMI_RGB888_BUFFER_SIZE     ((size_t)DISPLAY_PIXEL_COUNT * HDMI_RGB888_BYTES_PER_PIXEL)
-#define DISPLAY_FLUSH_TIMEOUT_MS    1000
+#define LVGL_DRAW_BUFFER_LINES      ((uint32_t)CONFIG_HDMI_LVGL_DRAW_BUF_LINES)
+#define LVGL_DRAW_BUFFER_PIXELS     ((uint32_t)DISPLAY_OUTPUT_H_RES * LVGL_DRAW_BUFFER_LINES)
+#define LVGL_DRAW_BUFFER_SIZE       ((size_t)LVGL_DRAW_BUFFER_PIXELS * sizeof(lv_color_t))
 #define LVGL_TICK_PERIOD_MS         1
 #define LVGL_TASK_MAX_DELAY_MS      10
 
+#if LV_COLOR_DEPTH == 16
+#if LV_COLOR_16_SWAP
+#error "The HDMI PPA flush path requires LV_COLOR_16_SWAP=0"
+#endif
+#define LVGL_PPA_COLOR_MODE PPA_SRM_COLOR_MODE_RGB565
+#elif LV_COLOR_DEPTH == 32
+#define LVGL_PPA_COLOR_MODE PPA_SRM_COLOR_MODE_ARGB8888
+#else
+#error "The HDMI PPA flush path supports LVGL RGB565 or ARGB8888 only"
+#endif
+
+typedef struct {
+    ppa_client_handle_t client;
+    esp_lcd_panel_handle_t panel;
+    esp_lcd_draw_bitmap_hook_data_t hook_data;
+} hdmi_ppa_hook_context_t;
+
 static esp_lcd_panel_handle_t s_lcd_panel;
 static esp_lcd_panel_io_handle_t s_lcd_io;
-static SemaphoreHandle_t s_trans_done_sem;
+static uint8_t *s_hdmi_frame_buffer;
+static ppa_client_handle_t s_ppa_client;
+static hdmi_ppa_hook_context_t s_ppa_hook_context;
 static lv_disp_draw_buf_t s_lvgl_draw_buf;
-static lv_color_t *s_lvgl_draw_buffer;
-static uint8_t *s_hdmi_flush_buffer;
+static lv_disp_drv_t s_lvgl_disp_drv;
+static lv_color_t *s_lvgl_draw_buffers[2];
 static esp_timer_handle_t s_lvgl_tick_timer;
 static uint32_t s_flush_count;
+static uint32_t s_refresh_count;
+static uint32_t s_refresh_window_count;
+static int64_t s_refresh_window_start_us;
 
-static IRAM_ATTR bool flush_dpi_panel_ready_callback(esp_lcd_panel_handle_t panel,
-                                                     esp_lcd_dpi_panel_event_data_t *edata,
-                                                     void *user_ctx)
+static IRAM_ATTR bool ppa_srm_trans_done_callback(ppa_client_handle_t client,
+                                                  ppa_event_data_t *edata,
+                                                  void *user_ctx)
+{
+    (void)client;
+    (void)edata;
+
+    hdmi_ppa_hook_context_t *hook_context = (hdmi_ppa_hook_context_t *)user_ctx;
+    if (hook_context != NULL && hook_context->hook_data.on_hook_end != NULL) {
+        return hook_context->hook_data.on_hook_end(hook_context->panel);
+    }
+
+    return false;
+}
+
+static IRAM_ATTR bool lvgl_flush_ready_callback(esp_lcd_panel_handle_t panel,
+                                                esp_lcd_dpi_panel_event_data_t *edata,
+                                                void *user_ctx)
 {
     (void)panel;
     (void)edata;
-    (void)user_ctx;
 
-    BaseType_t task_awake = pdFALSE;
-    if (s_trans_done_sem) {
-        xSemaphoreGiveFromISR(s_trans_done_sem, &task_awake);
+    lv_disp_drv_t *disp_drv = (lv_disp_drv_t *)user_ctx;
+    if (disp_drv != NULL) {
+        lv_disp_flush_ready(disp_drv);
     }
-    return task_awake == pdTRUE;
+    return false;
 }
 
 static size_t get_psram_cache_line_size(void)
@@ -82,26 +121,60 @@ static size_t get_psram_cache_line_size(void)
     return cache_line_size;
 }
 
-static void convert_lvgl_to_hdmi_rgb888(const lv_color_t *src,
-                                        uint32_t src_stride_px,
-                                        uint8_t *dst,
-                                        uint32_t width,
-                                        uint32_t height)
+static esp_err_t ppa_draw_bitmap_hook(esp_lcd_panel_handle_t panel,
+                                      const esp_lcd_draw_bitmap_hook_data_t *hook_data,
+                                      void *user_ctx)
 {
-    for (uint32_t y = 0; y < height; ++y) {
-        const lv_color_t *src_row = src + (y * src_stride_px);
-        uint8_t *dst_row = dst + ((size_t)y * width * HDMI_RGB888_BYTES_PER_PIXEL);
-
-        for (uint32_t x = 0; x < width; ++x) {
-            const lv_color_t color = src_row[x];
-            const size_t dst_offset = (size_t)x * HDMI_RGB888_BYTES_PER_PIXEL;
-
-            /* The existing HDMI/JPEG path uses BGR byte order for RGB888 panel data. */
-            dst_row[dst_offset + 0] = LV_COLOR_GET_B(color);
-            dst_row[dst_offset + 1] = LV_COLOR_GET_G(color);
-            dst_row[dst_offset + 2] = LV_COLOR_GET_R(color);
-        }
+    hdmi_ppa_hook_context_t *hook_context = (hdmi_ppa_hook_context_t *)user_ctx;
+    if (hook_context == NULL || hook_context->client == NULL || hook_data == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
+
+    const int src_block_w = hook_data->src_x_end - hook_data->src_x_start;
+    const int src_block_h = hook_data->src_y_end - hook_data->src_y_start;
+    const int dst_block_w = hook_data->dst_x_end - hook_data->dst_x_start;
+    const int dst_block_h = hook_data->dst_y_end - hook_data->dst_y_start;
+    const size_t output_buffer_size = (size_t)hook_data->dst_x_size *
+                                      (size_t)hook_data->dst_y_size *
+                                      HDMI_RGB888_BYTES_PER_PIXEL;
+
+    if (panel != hook_context->panel || hook_data->bits_per_pixel != 24 ||
+        src_block_w <= 0 || src_block_h <= 0 ||
+        src_block_w != dst_block_w || src_block_h != dst_block_h ||
+        output_buffer_size > UINT32_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memcpy(&hook_context->hook_data, hook_data, sizeof(*hook_data));
+
+    const ppa_srm_oper_config_t ppa_config = {
+        .in = {
+            .buffer = hook_data->src_data,
+            .pic_w = (uint32_t)hook_data->src_x_size,
+            .pic_h = (uint32_t)hook_data->src_y_size,
+            .block_w = (uint32_t)src_block_w,
+            .block_h = (uint32_t)src_block_h,
+            .block_offset_x = (uint32_t)hook_data->src_x_start,
+            .block_offset_y = (uint32_t)hook_data->src_y_start,
+            .srm_cm = LVGL_PPA_COLOR_MODE,
+        },
+        .out = {
+            .buffer = hook_data->dst_data,
+            .buffer_size = (uint32_t)output_buffer_size,
+            .pic_w = (uint32_t)hook_data->dst_x_size,
+            .pic_h = (uint32_t)hook_data->dst_y_size,
+            .block_offset_x = (uint32_t)hook_data->dst_x_start,
+            .block_offset_y = (uint32_t)hook_data->dst_y_start,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB888,
+        },
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+        .scale_x = 1.0f,
+        .scale_y = 1.0f,
+        .mode = PPA_TRANS_MODE_NON_BLOCKING,
+        .user_data = hook_context,
+    };
+
+    return ppa_do_scale_rotate_mirror(hook_context->client, &ppa_config);
 }
 
 static void fill_boot_diagnostic_frame(uint8_t *buffer, uint32_t width, uint32_t height)
@@ -129,27 +202,18 @@ static void fill_boot_diagnostic_frame(uint8_t *buffer, uint32_t width, uint32_t
 
 static esp_err_t submit_boot_diagnostic_frame(void)
 {
-    if (s_lcd_panel == NULL || s_hdmi_flush_buffer == NULL) {
+    if (s_lcd_panel == NULL || s_hdmi_frame_buffer == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    fill_boot_diagnostic_frame(s_hdmi_flush_buffer, DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES);
-
-    if (s_trans_done_sem) {
-        xSemaphoreTake(s_trans_done_sem, 0);
-    }
+    fill_boot_diagnostic_frame(s_hdmi_frame_buffer, DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES);
 
     esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, 0, 0,
                                               DISPLAY_OUTPUT_H_RES, DISPLAY_OUTPUT_V_RES,
-                                              s_hdmi_flush_buffer);
+                                              s_hdmi_frame_buffer);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to submit boot diagnostic frame: %s", esp_err_to_name(ret));
         return ret;
-    }
-
-    if (s_trans_done_sem &&
-        xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DISPLAY_FLUSH_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGW(TAG, "Boot diagnostic frame flush timeout");
     }
 
     const bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(s_lcd_panel);
@@ -189,41 +253,51 @@ static void lvgl_flush_cb(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_col
     const uint32_t flush_h = (uint32_t)(y2 - y1 + 1);
     const uint32_t flush_px = flush_w * flush_h;
 
-    if (flush_px > DISPLAY_PIXEL_COUNT || s_hdmi_flush_buffer == NULL || s_lcd_panel == NULL) {
+    if (flush_px > LVGL_DRAW_BUFFER_PIXELS || s_ppa_client == NULL || s_lcd_panel == NULL) {
         ESP_LOGE(TAG, "Invalid LVGL flush request: area=%" PRId32 "x%" PRId32 " buffer=%p panel=%p",
-                 area_w, area_h, s_hdmi_flush_buffer, s_lcd_panel);
+                 area_w, area_h, color_p, s_lcd_panel);
         lv_disp_flush_ready(disp_drv);
         return;
     }
 
-    const lv_color_t *src = color_p + ((y1 - area->y1) * area_w) + (x1 - area->x1);
-    convert_lvgl_to_hdmi_rgb888(src, (uint32_t)area_w, s_hdmi_flush_buffer, flush_w, flush_h);
-
-    if (s_trans_done_sem) {
-        xSemaphoreTake(s_trans_done_sem, 0);
-    }
-
-    esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, x1, y1, x2 + 1, y2 + 1, s_hdmi_flush_buffer);
+    const bool is_last = lv_disp_flush_is_last(disp_drv);
+    const int32_t src_x_start = x1 - area->x1;
+    const int32_t src_y_start = y1 - area->y1;
+    esp_err_t ret = esp_lcd_panel_draw_bitmap_2d(s_lcd_panel,
+                                                 x1, y1, x2 + 1, y2 + 1,
+                                                 color_p,
+                                                 area_w, area_h,
+                                                 src_x_start, src_y_start,
+                                                 src_x_start + (int32_t)flush_w,
+                                                 src_y_start + (int32_t)flush_h);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to submit LVGL frame: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to submit PPA LVGL flush: %s", esp_err_to_name(ret));
         lv_disp_flush_ready(disp_drv);
         return;
-    }
-
-    if (s_trans_done_sem &&
-        xSemaphoreTake(s_trans_done_sem, pdMS_TO_TICKS(DISPLAY_FLUSH_TIMEOUT_MS)) != pdTRUE) {
-        ESP_LOGW(TAG, "Display flush timeout (%" PRIu32 "x%" PRIu32 " at %" PRId32 ",%" PRId32 ")",
-                 flush_w, flush_h, x1, y1);
     }
 
     s_flush_count++;
-    if (s_flush_count <= 3 || (s_flush_count % 120) == 0) {
-        const bool hdmi_ready = esp_lcd_panel_lt8912b_is_ready(s_lcd_panel);
-        ESP_LOGI(TAG, "Flushed LVGL frame #%" PRIu32 " (%" PRIu32 "x%" PRIu32 "), LT8912 ready=%s",
-                 s_flush_count, flush_w, flush_h, hdmi_ready ? "yes" : "no");
+    if (s_flush_count <= 3) {
+        ESP_LOGI(TAG, "Queued PPA flush #%" PRIu32 " (%" PRIu32 "x%" PRIu32 " at %" PRId32 ",%" PRId32 ")",
+                 s_flush_count, flush_w, flush_h, x1, y1);
     }
 
-    lv_disp_flush_ready(disp_drv);
+    if (is_last) {
+        s_refresh_count++;
+        s_refresh_window_count++;
+
+        const int64_t now_us = esp_timer_get_time();
+        if (s_refresh_window_start_us == 0) {
+            s_refresh_window_start_us = now_us;
+        } else if ((now_us - s_refresh_window_start_us) >= 2000000) {
+            const float refresh_rate = (float)s_refresh_window_count * 1000000.0f /
+                                       (float)(now_us - s_refresh_window_start_us);
+            ESP_LOGI(TAG, "LVGL refresh submit rate: %.1f FPS (refreshes=%" PRIu32 ", flushes=%" PRIu32 ")",
+                     (double)refresh_rate, s_refresh_count, s_flush_count);
+            s_refresh_window_count = 0;
+            s_refresh_window_start_us = now_us;
+        }
+    }
 }
 
 #if !LV_TICK_CUSTOM
@@ -238,30 +312,78 @@ static esp_err_t allocate_lvgl_buffers(void)
 {
     const size_t cache_line_size = get_psram_cache_line_size();
 
-    s_lvgl_draw_buffer = heap_caps_aligned_calloc(cache_line_size,
-                                                  DISPLAY_PIXEL_COUNT,
-                                                  sizeof(lv_color_t),
-                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_lvgl_draw_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate LVGL draw buffer (%u pixels)", (unsigned)DISPLAY_PIXEL_COUNT);
-        return ESP_ERR_NO_MEM;
+    for (size_t i = 0; i < 2; ++i) {
+        s_lvgl_draw_buffers[i] = heap_caps_aligned_calloc(cache_line_size,
+                                                          1,
+                                                          LVGL_DRAW_BUFFER_SIZE,
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+        if (s_lvgl_draw_buffers[i] == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate LVGL draw buffer %u (%u bytes)",
+                     (unsigned)i, (unsigned)LVGL_DRAW_BUFFER_SIZE);
+            for (size_t j = 0; j < i; ++j) {
+                heap_caps_free(s_lvgl_draw_buffers[j]);
+                s_lvgl_draw_buffers[j] = NULL;
+            }
+            return ESP_ERR_NO_MEM;
+        }
     }
 
-    s_hdmi_flush_buffer = heap_caps_aligned_calloc(cache_line_size,
-                                                  1,
-                                                  HDMI_RGB888_BUFFER_SIZE,
-                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_hdmi_flush_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate HDMI RGB888 flush buffer (%u bytes)",
-                 (unsigned)HDMI_RGB888_BUFFER_SIZE);
-        heap_caps_free(s_lvgl_draw_buffer);
-        s_lvgl_draw_buffer = NULL;
-        return ESP_ERR_NO_MEM;
+    ESP_LOGI(TAG, "Allocated two %u-line LVGL draw buffers: %u bytes total, color depth=%d",
+             (unsigned)LVGL_DRAW_BUFFER_LINES,
+             (unsigned)(LVGL_DRAW_BUFFER_SIZE * 2U),
+             LV_COLOR_DEPTH);
+    return ESP_OK;
+}
+
+static esp_err_t init_ppa_flush_path(void)
+{
+    const ppa_client_config_t ppa_client_config = {
+        .oper_type = PPA_OPERATION_SRM,
+        .max_pending_trans_num = 1,
+        .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+    };
+    esp_err_t ret = ppa_register_client(&ppa_client_config, &s_ppa_client);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register PPA client: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    ESP_LOGI(TAG, "Allocated LVGL draw buffer=%u bytes, HDMI flush buffer=%u bytes",
-             (unsigned)(DISPLAY_PIXEL_COUNT * sizeof(lv_color_t)),
-             (unsigned)HDMI_RGB888_BUFFER_SIZE);
+    const ppa_event_callbacks_t ppa_callbacks = {
+        .on_trans_done = ppa_srm_trans_done_callback,
+    };
+    ret = ppa_client_register_event_callbacks(s_ppa_client, &ppa_callbacks);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register PPA callback: %s", esp_err_to_name(ret));
+        ppa_unregister_client(s_ppa_client);
+        s_ppa_client = NULL;
+        return ret;
+    }
+
+    s_ppa_hook_context.client = s_ppa_client;
+    s_ppa_hook_context.panel = s_lcd_panel;
+    const esp_lcd_panel_hooks_t panel_hooks = {
+        .draw_bitmap_hook = ppa_draw_bitmap_hook,
+    };
+    ret = esp_lcd_dpi_panel_register_hooks(s_lcd_panel, &panel_hooks, &s_ppa_hook_context);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register DPI PPA hook: %s", esp_err_to_name(ret));
+        ppa_unregister_client(s_ppa_client);
+        s_ppa_client = NULL;
+        memset(&s_ppa_hook_context, 0, sizeof(s_ppa_hook_context));
+        return ret;
+    }
+
+    const esp_lcd_dpi_panel_event_callbacks_t panel_callbacks = {
+        .on_color_trans_done = lvgl_flush_ready_callback,
+    };
+    ret = esp_lcd_dpi_panel_register_event_callbacks(s_lcd_panel, &panel_callbacks, &s_lvgl_disp_drv);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register LVGL flush callback: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Enabled asynchronous PPA %s-to-RGB888 partial flush path",
+             LV_COLOR_DEPTH == 16 ? "RGB565" : "ARGB8888");
     return ESP_OK;
 }
 
@@ -284,20 +406,13 @@ static esp_err_t init_hdmi_display(void)
         return ret;
     }
 
-    s_trans_done_sem = xSemaphoreCreateBinary();
-    if (s_trans_done_sem == NULL) {
-        ESP_LOGE(TAG, "Failed to create display flush semaphore");
-        return ESP_ERR_NO_MEM;
-    }
-
-    const esp_lcd_dpi_panel_event_callbacks_t callbacks = {
-        .on_color_trans_done = flush_dpi_panel_ready_callback,
-    };
-    ret = esp_lcd_dpi_panel_register_event_callbacks(s_lcd_panel, &callbacks, NULL);
+    void *frame_buffer = NULL;
+    ret = esp_lcd_dpi_panel_get_frame_buffer(s_lcd_panel, 1, &frame_buffer);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register DPI panel callbacks: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to get DPI frame buffer: %s", esp_err_to_name(ret));
         return ret;
     }
+    s_hdmi_frame_buffer = (uint8_t *)frame_buffer;
 
     return ESP_OK;
 }
@@ -336,16 +451,25 @@ static esp_err_t init_lvgl_port(void)
         return ret;
     }
 
-    lv_disp_draw_buf_init(&s_lvgl_draw_buf, s_lvgl_draw_buffer, NULL, DISPLAY_PIXEL_COUNT);
+    lv_disp_draw_buf_init(&s_lvgl_draw_buf,
+                          s_lvgl_draw_buffers[0],
+                          s_lvgl_draw_buffers[1],
+                          LVGL_DRAW_BUFFER_PIXELS);
 
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = DISPLAY_OUTPUT_H_RES;
-    disp_drv.ver_res = DISPLAY_OUTPUT_V_RES;
-    disp_drv.flush_cb = lvgl_flush_cb;
-    disp_drv.draw_buf = &s_lvgl_draw_buf;
-    disp_drv.full_refresh = 1;
-    lv_disp_drv_register(&disp_drv);
+    lv_disp_drv_init(&s_lvgl_disp_drv);
+    s_lvgl_disp_drv.hor_res = DISPLAY_OUTPUT_H_RES;
+    s_lvgl_disp_drv.ver_res = DISPLAY_OUTPUT_V_RES;
+    s_lvgl_disp_drv.flush_cb = lvgl_flush_cb;
+    s_lvgl_disp_drv.draw_buf = &s_lvgl_draw_buf;
+    if (lv_disp_drv_register(&s_lvgl_disp_drv) == NULL) {
+        ESP_LOGE(TAG, "Failed to register LVGL display driver");
+        return ESP_FAIL;
+    }
+
+    ret = init_ppa_flush_path();
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
     return ESP_OK;
 }

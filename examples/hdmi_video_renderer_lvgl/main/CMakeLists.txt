@@ -7,5 +7,6 @@ idf_component_register(
         espressif__esp_lcd_lt8912b
         t5_p4_board
     PRIV_REQUIRES
+        esp_driver_ppa
         esp_mm
 )
