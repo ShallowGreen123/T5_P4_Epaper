@@ -22,6 +22,12 @@ idf.py -C examples/hdmi_video_renderer build
 idf.py -C examples/hdmi_video_renderer -p <PORT> flash monitor
 ```
 
+The example disables the esptool RAM stub (`CONFIG_ESPTOOLPY_NO_STUB=y`) for
+the T5-P4 USB-to-UART download path. If this project was built before that
+setting was added, remove the generated `sdkconfig` (or run
+`idf.py reconfigure`) before flashing so the setting from
+`sdkconfig.defaults` is applied.
+
 ## Expected Log Output
 
 You should see lines similar to:

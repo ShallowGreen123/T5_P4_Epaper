@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         esp_driver_jpeg
+        esp_driver_i2s
         esp_driver_ppa
         esp_extractor
         esp_lcd
