@@ -328,7 +328,7 @@ static esp_err_t init_panel()
     vendor_config.mipi_config.lane_num = kDsiLaneCount;
 
     esp_lcd_panel_dev_config_t panel_config = {};
-    panel_config.reset_gpio_num = -1;
+    panel_config.reset_gpio_num = GPIO_NUM_NC;
     panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = 24;
     panel_config.vendor_config = &vendor_config;

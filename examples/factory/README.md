@@ -7,6 +7,7 @@ This example is a touch-driven factory test and hardware showcase for the T5-P4 
 ## Prerequisites
 
 - A LilyGo T5-P4 E-Paper V0.3 board.
+- ESP-IDF 6.1 and ESP32-P4 revision v3.2.
 - Optional peripherals depending on the page you want to test:
   battery, USB OTG load, SD card, camera module, HDMI monitor, and Wi-Fi environment.
 - Default touch and shared I2C wiring are already configured for the board.

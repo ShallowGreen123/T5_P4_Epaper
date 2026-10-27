@@ -267,18 +267,15 @@ static bool s3_notify_dma_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_pane
 
 // Maximum line width = 1024 * 4 = 4096 pixels
 #define MAX_TX_SIZE 1024
-static esp_lcd_i80_bus_config_t s3_bus_config = {
-    .dc_gpio_num = 0,
-    .wr_gpio_num = 0,
-    .clk_src = /*LCD_CLK_SRC_DEFAULT,*/ LCD_CLK_SRC_PLL160M,
-    .data_gpio_nums = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-    .bus_width = 0,
-    .max_transfer_bytes = MAX_TX_SIZE, 
-    .psram_trans_align = 0, // 0 = use default values
-    .sram_trans_align = 0,
-};
+// Value-initialize SDK-specific fields (IDF 5.x alignment / IDF 6.x DMA flags).
+static esp_lcd_i80_bus_config_t s3_bus_config = [] {
+    esp_lcd_i80_bus_config_t config = {};
+    config.clk_src = LCD_CLK_SRC_PLL160M;
+    config.max_transfer_bytes = MAX_TX_SIZE;
+    return config;
+}();
 static esp_lcd_panel_io_i80_config_t s3_io_config = {
-        .cs_gpio_num = 0,
+        .cs_gpio_num = (gpio_num_t)0,
         .pclk_hz = 12000000,
         .trans_queue_depth = 4,
         .on_color_trans_done = s3_notify_dma_ready,
@@ -1225,7 +1222,7 @@ int bbepIOInit(FASTEPDSTATE *pState)
     s3_bus_config.wr_gpio_num = (gpio_num_t)pState->panelDef.ioCL;
     s3_bus_config.bus_width = pState->panelDef.bus_width;
     for (int i=0; i<pState->panelDef.bus_width; i++) {
-        s3_bus_config.data_gpio_nums[i] = pState->panelDef.data[i];
+        s3_bus_config.data_gpio_nums[i] = (gpio_num_t)pState->panelDef.data[i];
     }   
     ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&s3_bus_config, &i80_bus));
     s3_io_config.pclk_hz = pState->panelDef.bus_speed;
@@ -1233,7 +1230,7 @@ int bbepIOInit(FASTEPDSTATE *pState)
         bSlowSPH = 1;
         u8SPH = (gpio_num_t)pState->panelDef.ioSPH;
         u8CKV = (gpio_num_t)pState->panelDef.ioCKV;
-        s3_io_config.cs_gpio_num = -1; // disable hardware CS
+        s3_io_config.cs_gpio_num = (gpio_num_t)-1; // disable hardware CS
     } else {
         s3_io_config.cs_gpio_num = (gpio_num_t)pState->panelDef.ioSPH;
     }

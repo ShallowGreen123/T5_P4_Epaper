@@ -28,7 +28,7 @@
 #include "bb_ep_gfx.inl"
 #include "esp_log.h"
 
-static char *TAG = "FastEPD";
+static const char *TAG = "FastEPD";
 
 //#pragma GCC optimize("O2")
 // Display how much time each operation takes on the serial monitor
