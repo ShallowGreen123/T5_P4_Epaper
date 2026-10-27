@@ -3,9 +3,12 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "driver/gpio.h"
 #include "epd_video.h"
+#include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,6 +20,52 @@ constexpr int kAnimationTop = 120;
 constexpr int kAnimationBottom = 650;
 constexpr int kAnimationFrames = 240;
 constexpr int kQualityHoldMs = 1800;
+constexpr gpio_num_t kFrontlight1 = GPIO_NUM_53;
+constexpr gpio_num_t kFrontlight2 = GPIO_NUM_52;
+constexpr gpio_num_t kBootButton = GPIO_NUM_35;
+constexpr int64_t kButtonDebounceUs = 30000;
+
+bool g_boot_sample_pressed = false;
+bool g_boot_stable_pressed = false;
+int64_t g_boot_change_us = 0;
+
+esp_err_t initialize_frontlight_and_button()
+{
+    // V0.3 frontlight PWM inputs are active high. Hold both channels low.
+    ESP_RETURN_ON_ERROR(gpio_set_level(kFrontlight1, 0), kTag, "clear frontlight 1 failed");
+    ESP_RETURN_ON_ERROR(gpio_set_level(kFrontlight2, 0), kTag, "clear frontlight 2 failed");
+    gpio_config_t config = {};
+    config.pin_bit_mask = (1ULL << kFrontlight1) | (1ULL << kFrontlight2);
+    config.mode = GPIO_MODE_OUTPUT;
+    config.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    ESP_RETURN_ON_ERROR(gpio_config(&config), kTag, "disable frontlight failed");
+
+    config = {};
+    config.pin_bit_mask = 1ULL << kBootButton;
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    ESP_RETURN_ON_ERROR(gpio_config(&config), kTag, "configure BOOT button failed");
+    g_boot_sample_pressed = gpio_get_level(kBootButton) == 0;
+    g_boot_stable_pressed = g_boot_sample_pressed;
+    g_boot_change_us = esp_timer_get_time();
+    ESP_LOGI(kTag, "frontlight off; BOOT GPIO%d triggers full-screen refresh", kBootButton);
+    return ESP_OK;
+}
+
+bool boot_button_pressed()
+{
+    const bool pressed = gpio_get_level(kBootButton) == 0;
+    const int64_t now = esp_timer_get_time();
+    if (pressed != g_boot_sample_pressed) {
+        g_boot_sample_pressed = pressed;
+        g_boot_change_us = now;
+    }
+    if (pressed == g_boot_stable_pressed || now - g_boot_change_us < kButtonDebounceUs) {
+        return false;
+    }
+    g_boot_stable_pressed = pressed;
+    return pressed;
+}
 
 struct Canvas {
     uint8_t *pixels;
@@ -342,6 +391,23 @@ void submit_quality_page()
              static_cast<unsigned long>(epd_video_get_vsync_count()));
 }
 
+void refresh_screen()
+{
+    ESP_LOGI(kTag, "BOOT pressed: full-screen black/white refresh");
+    // Complete each drive sequence before changing polarity. Using the raw
+    // framebuffer convention here: 0x00 is black and 0xFF is white.
+    wait_until_idle();
+    for (const uint8_t fill : {0x00, 0xFF}) {
+        wait_until_can_submit();
+        memset(epd_video_get_backbuffer(), fill, EPD_VIDEO_FRAME_BYTES);
+        while (!epd_video_submit(0, EPD_VIDEO_HEIGHT)) {
+            vTaskDelay(1);
+        }
+        wait_until_idle();
+    }
+    ESP_LOGI(kTag, "full-screen refresh complete; resuming animation");
+}
+
 void play_animation_loop()
 {
     uint32_t displayed_frames = 0;
@@ -350,10 +416,17 @@ void play_animation_loop()
     int64_t window_start = esp_timer_get_time();
 
     while (true) {
+        const bool refreshed = boot_button_pressed();
+        if (refreshed) {
+            refresh_screen();
+            // Exclude the manual refresh pause from the producer FPS window.
+            frames_in_window = 0;
+            window_start = esp_timer_get_time();
+        }
         wait_until_can_submit();
         Canvas canvas{epd_video_get_backbuffer()};
         draw_animation_frame(canvas, displayed_frames, measured_fps);
-        while (!epd_video_submit(0, kAnimationBottom)) {
+        while (!epd_video_submit(0, refreshed ? EPD_VIDEO_HEIGHT : kAnimationBottom)) {
             vTaskDelay(1);
         }
         ++displayed_frames;
@@ -377,8 +450,11 @@ void play_animation_loop()
 
 extern "C" void app_main(void)
 {
+    if (initialize_frontlight_and_button() != ESP_OK) {
+        return;
+    }
     ESP_LOGI(kTag, "LILYGO T5-P4 E-Paper V0.3 raw refresh demo");
-    ESP_LOGI(kTag, "ESP-IDF 6.0.1, ESP32-P4 v3.2, no M5GFX");
+    ESP_LOGI(kTag, "ESP-IDF %s, ESP32-P4 v3.2, no M5GFX", esp_get_idf_version());
     ESP_LOGI(kTag, "heap before init: internal=%u PSRAM=%u",
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));

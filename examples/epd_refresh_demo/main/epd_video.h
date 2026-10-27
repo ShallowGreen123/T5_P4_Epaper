@@ -3,6 +3,16 @@
 #include <cstddef>
 #include <cstdint>
 
+// 1: optimized lookup-table scan, 40 fps target (default).
+// 0: original per-pixel calculation, 24 fps target.
+#ifndef EPD_VIDEO_SPEED_OPTIMIZED
+#define EPD_VIDEO_SPEED_OPTIMIZED 0
+#endif
+
+#if EPD_VIDEO_SPEED_OPTIMIZED != 0 && EPD_VIDEO_SPEED_OPTIMIZED != 1
+#error "EPD_VIDEO_SPEED_OPTIMIZED must be 0 or 1"
+#endif
+
 constexpr uint16_t EPD_VIDEO_WIDTH = 1440;
 constexpr uint16_t EPD_VIDEO_HEIGHT = 720;
 constexpr size_t EPD_VIDEO_ROW_BYTES = EPD_VIDEO_WIDTH / 8U;

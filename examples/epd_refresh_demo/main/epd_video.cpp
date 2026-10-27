@@ -18,12 +18,12 @@
 namespace {
 
 constexpr char kTag[] = "epd_video";
-constexpr uint32_t kTargetFps = 24;
+constexpr uint32_t kTargetFps = EPD_VIDEO_SPEED_OPTIMIZED ? 40 : 24;
 // The T5-P4 board's existing EPD configuration uses a 40 MHz pixel clock.
 // Keep the reference project's row/state-machine logic, but use the faster
 // board-qualified clock so a 1440x720 panel is not limited to ~15 scans/s.
 constexpr uint32_t kEpdBusHz = 40000000;
-constexpr int kVcomMillivolts = -1600;
+constexpr int kVcomMillivolts = -2300;
 constexpr uint8_t kDrivePasses = 3;
 constexpr uint8_t kDirtyPadding = 6;
 constexpr size_t kStateRowBytes = EPD_VIDEO_WIDTH / 2U;
@@ -52,6 +52,8 @@ constexpr uint8_t kTpsRegRevision = 0x10;
 constexpr uint8_t kTpsEnableAllRails = 0x3F;
 constexpr uint8_t kTpsVcom2Reserved = 0x04;
 constexpr uint8_t kTpsPanelRailsMask = 0x5A;
+constexpr uint32_t kTpsWakeupDelayUs = 2000;
+constexpr int64_t kTpsReadyTimeoutUs = 100000;
 
 constexpr gpio_num_t kDummyDcGpio = GPIO_NUM_22;
 constexpr gpio_num_t kWrGpio = GPIO_NUM_24;
@@ -64,6 +66,13 @@ constexpr gpio_num_t kDataGpios[8] = {
     GPIO_NUM_31, GPIO_NUM_32, GPIO_NUM_33, GPIO_NUM_34,
 };
 constexpr uint8_t kResetCounterMask[4] = {0xFC, 0xE0, 0x1C, 0x00};
+
+#if EPD_VIDEO_SPEED_OPTIMIZED
+// Keep the hot-path tables in internal RAM: 256 states x 4 input pairs.
+// Each entry packs the next state (low byte) and drive nibble (high byte).
+uint16_t g_drive_lut[1024] = {};
+uint8_t g_reverse_lut[256] = {};
+#endif
 
 i2c_master_bus_handle_t g_i2c_bus = nullptr;
 i2c_master_dev_handle_t g_pca = nullptr;
@@ -221,6 +230,42 @@ esp_err_t tps_read_u8(uint8_t reg, uint8_t *value)
     return i2c_master_transmit_receive(g_tps, &reg, 1, value, 1, 100);
 }
 
+esp_err_t wait_tps_ready(uint8_t *revision)
+{
+    // TPS65185x datasheet Figure 2 requires at least 1.8 ms from WAKEUP
+    // rising to the first I2C access. A two-tick vTaskDelay can return after
+    // only one tick, so use a wall-clock delay for this minimum interval.
+    esp_rom_delay_us(kTpsWakeupDelayUs);
+
+    const int64_t deadline = esp_timer_get_time() + kTpsReadyTimeoutUs;
+    esp_err_t err;
+    do {
+        err = tps_read_u8(kTpsRegRevision, revision);
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        vTaskDelay(1);
+    } while (esp_timer_get_time() < deadline);
+
+    ESP_LOGE(kTag, "TPS65185x at 0x%02X not ready after WAKEUP: %s (0x%x)",
+             kTpsAddress, esp_err_to_name(err), static_cast<unsigned>(err));
+    uint8_t inputs[2] = {};
+    const uint8_t reg = kPcaRegInput0;
+    const esp_err_t pca_err = i2c_master_transmit_receive(
+        g_pca, &reg, 1, inputs, sizeof(inputs), 100);
+    if (pca_err == ESP_OK) {
+        ESP_LOGE(kTag, "PCA inputs=0x%02X%02X WAKEUP=%u PWRUP=%u PG=%u",
+                 inputs[1], inputs[0],
+                 (inputs[1] >> (kPcaTpsWakeup - 8)) & 1U,
+                 (inputs[1] >> (kPcaTpsPwrup - 8)) & 1U,
+                 (inputs[1] >> (kPcaTpsPowerGood - 8)) & 1U);
+    } else {
+        ESP_LOGE(kTag, "read PCA wakeup diagnostics failed: %s",
+                 esp_err_to_name(pca_err));
+    }
+    return err;
+}
+
 esp_err_t initialize_control_bus()
 {
     if (g_i2c_bus != nullptr) {
@@ -291,10 +336,9 @@ esp_err_t panel_power_on()
     ESP_RETURN_ON_ERROR(pca_set_level(kPcaTpsPwrup, false), kTag, "clear PWRUP failed");
     ESP_RETURN_ON_ERROR(pca_set_level(kPcaVcomCtrl, false), kTag, "clear VCOM failed");
     ESP_RETURN_ON_ERROR(pca_set_level(kPcaTpsWakeup, true), kTag, "set WAKEUP failed");
-    vTaskDelay(pdMS_TO_TICKS(2));
 
     uint8_t revision = 0;
-    ESP_RETURN_ON_ERROR(tps_read_u8(kTpsRegRevision, &revision),
+    ESP_RETURN_ON_ERROR(wait_tps_ready(&revision),
                         kTag, "read TPS revision failed");
     ESP_RETURN_ON_FALSE(revision == 0x45 || revision == 0x55 ||
                             revision == 0x65 || revision == 0x66,
@@ -482,6 +526,32 @@ uint8_t reverse_bits(uint8_t value)
                                 ((value & 0x55U) << 1));
 }
 
+#if EPD_VIDEO_SPEED_OPTIMIZED
+void initialize_scan_tables()
+{
+    for (unsigned value = 0; value < 256; ++value) {
+        g_reverse_lut[value] = reverse_bits(static_cast<uint8_t>(value));
+        for (unsigned direction = 0; direction < 4; ++direction) {
+            uint8_t state = static_cast<uint8_t>(value);
+            state &= kResetCounterMask[(state ^ direction) & 0x03U];
+            state |= direction;
+            const uint8_t drive =
+                ((state & 0x80U) ? 0U : ((direction & 0x02U) ? 0x4U : 0x8U)) |
+                ((state & 0x10U) ? 0U : ((direction & 0x01U) ? 0x1U : 0x2U));
+            state = static_cast<uint8_t>(state + (((~state) >> 2) & 0x24U));
+            if (((state >> 5) & 0x07U) >= kDrivePasses) {
+                state |= 0x80U;
+            }
+            if (((state >> 2) & 0x07U) >= kDrivePasses) {
+                state |= 0x10U;
+            }
+            g_drive_lut[(value << 2) | direction] =
+                static_cast<uint16_t>(state | (drive << 8));
+        }
+    }
+}
+#endif
+
 bool build_active_row(const uint8_t *frame, uint16_t row, uint8_t *destination)
 {
     const uint8_t *source_row =
@@ -491,6 +561,22 @@ bool build_active_row(const uint8_t *frame, uint16_t row, uint8_t *destination)
     bool needs_more_drive = false;
 
     for (size_t source_byte = 0; source_byte < EPD_VIDEO_ROW_BYTES; ++source_byte) {
+#if EPD_VIDEO_SPEED_OPTIMIZED
+        uint8_t incoming_pixels = g_reverse_lut[
+            source_row[EPD_VIDEO_ROW_BYTES - 1U - source_byte]];
+        for (uint8_t output_byte = 0; output_byte < 2; ++output_byte) {
+            const uint16_t first = g_drive_lut[
+                (static_cast<unsigned>(state_ptr[0]) << 2) | (incoming_pixels >> 6)];
+            const uint16_t second = g_drive_lut[
+                (static_cast<unsigned>(state_ptr[1]) << 2) | ((incoming_pixels >> 4) & 3U)];
+            state_ptr[0] = static_cast<uint8_t>(first);
+            state_ptr[1] = static_cast<uint8_t>(second);
+            needs_more_drive |= ((first & second & 0x90U) != 0x90U);
+            *write_ptr++ = static_cast<uint8_t>(((first >> 4) & 0xF0U) | (second >> 8));
+            state_ptr += 2;
+            incoming_pixels <<= 4;
+        }
+#else
         uint8_t incoming_pixels = reverse_bits(
             source_row[EPD_VIDEO_ROW_BYTES - 1U - source_byte]);
         for (uint8_t output_byte = 0; output_byte < 2; ++output_byte) {
@@ -524,6 +610,7 @@ bool build_active_row(const uint8_t *frame, uint16_t row, uint8_t *destination)
             }
             *write_ptr++ = packed_drive;
         }
+#endif
     }
     g_row_active[row] = needs_more_drive ? 1U : 0U;
     return needs_more_drive;
@@ -666,6 +753,11 @@ bool epd_video_init()
     if (g_panel_io != nullptr) {
         return true;
     }
+#if EPD_VIDEO_SPEED_OPTIMIZED
+    initialize_scan_tables();
+#endif
+    ESP_LOGI(kTag, "speed optimization=%d target=%lu fps",
+             EPD_VIDEO_SPEED_OPTIMIZED, static_cast<unsigned long>(kTargetFps));
     if (initialize_control_bus() != ESP_OK || !initialize_panel_bus()) {
         return false;
     }
