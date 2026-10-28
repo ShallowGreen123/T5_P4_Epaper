@@ -16,6 +16,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+esp_err_t esp_vfs_fat_register_legacy_compat(const char *base_path, const char *fat_drive,
+                                              size_t max_files, FATFS **out_fs)
+{
+    const esp_vfs_fat_conf_t conf = {
+        .base_path = base_path,
+        .fat_drive = fat_drive,
+        .max_files = max_files,
+    };
+    return esp_vfs_fat_register(&conf, out_fs);
+}
+
 static const char *TAG = "usb_msc_wireless";
 
 #ifdef CONFIG_USE_EXTERNAL_SDCARD

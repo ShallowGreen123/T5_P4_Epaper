@@ -25,7 +25,7 @@ constexpr char kTag[] = "m5gfx_epd_touch_test";
 constexpr int kPanelWidth = 1440;
 constexpr int kPanelHeight = 720;
 constexpr int kEpdBusSpeedHz = 40000000;
-constexpr int kVcomMillivolts = -1600;
+constexpr int kVcomMillivolts = -2300;
 constexpr uint8_t kPanelMirrorXRotation = 6;
 
 constexpr gpio_num_t kEpdD0 = GPIO_NUM_27;
@@ -545,6 +545,12 @@ extern "C" void app_main(void)
 {
     ESP_LOGI(kTag, "starting M5GFX EPD touch test");
     log_heap("before init");
+
+    // Keep the frontlight disabled while exercising the e-paper and touch
+    // controller, avoiding unnecessary light and battery load.
+    if (t5_board_frontlight_set(0, 0) != ESP_OK) {
+        ESP_LOGW(kTag, "failed to disable frontlight");
+    }
 
     if (!display.init_without_reset(false)) {
         ESP_LOGE(kTag, "display init failed");

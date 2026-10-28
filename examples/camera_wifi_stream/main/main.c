@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/jpeg_encode.h"
 #include "esp_bit_defs.h"
@@ -30,13 +31,28 @@
 #include "esp_netif.h"
 #include "esp_video_device.h"
 #include "esp_video_init.h"
+
+/* IDF 6.1's lwIP headers define the same ioctl helpers as esp_video's V4L2
+ * compatibility header. Clear the socket versions before esp_video_ioctl.h
+ * includes V4L2 so the camera ioctl definitions remain unambiguous under
+ * -Werror. */
+#ifdef _IO
+#undef _IO
+#undef _IOR
+#undef _IOW
+#undef _IOWR
+#endif
 #include "esp_video_ioctl.h"
 #include "esp_wifi.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+
 #include "linux/videodev2.h"
+#include "lwip/sockets.h"
+#include "lwip/tcp.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
@@ -45,7 +61,7 @@
 #endif
 
 #ifndef CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS
-#define CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS 12
+#define CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS 20
 #endif
 
 #ifndef CONFIG_CAMERA_WIFI_STREAM_VIDEO_BUFFER_COUNT
@@ -80,7 +96,11 @@
 #define CAMERA_SCCB_ADDR_OV2710              0x36
 #define CAMERA_SCCB_ADDR_OV5645              0x3C
 
-#define CAMERA_POWER_SETTLE_MS               20
+#define BOARD_FRONTLIGHT_1_GPIO              GPIO_NUM_53
+#define BOARD_FRONTLIGHT_2_GPIO              GPIO_NUM_52
+#define CAMERA_POWER_SETTLE_MS               40
+#define CAMERA_SENSOR_READY_ATTEMPTS         25
+#define CAMERA_SENSOR_READY_INTERVAL_MS      20
 #define I2C_TIMEOUT_MS                       100
 #define VIDEO_BUFFER_COUNT                   CONFIG_CAMERA_WIFI_STREAM_VIDEO_BUFFER_COUNT
 #define WIFI_CONNECTED_BIT                   BIT0
@@ -129,6 +149,25 @@ static void camera_stream_stop(camera_stream_ctx_t *video);
 static esp_cam_sensor_xclk_handle_t s_xclk_handle;
 #endif
 
+static esp_err_t board_disable_frontlight(void)
+{
+    /* V0.3 frontlight inputs are active high. Match factory's explicit low
+     * level on GPIO53 and also disable the second channel. On the tested
+     * board, leaving GPIO53 unconfigured gave OV2710 PID=0x0000 despite
+     * a valid SCCB ACK; driving it low restored PID=0x2710. */
+    ESP_RETURN_ON_ERROR(gpio_set_level(BOARD_FRONTLIGHT_1_GPIO, 0), TAG, "clear frontlight 1 failed");
+    ESP_RETURN_ON_ERROR(gpio_set_level(BOARD_FRONTLIGHT_2_GPIO, 0), TAG, "clear frontlight 2 failed");
+    const gpio_config_t config = {
+        .pin_bit_mask = (1ULL << BOARD_FRONTLIGHT_1_GPIO) | (1ULL << BOARD_FRONTLIGHT_2_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&config), TAG, "disable board frontlight failed");
+    ESP_LOGI(TAG, "Frontlight off (GPIO%d/GPIO%d) before camera power-up",
+             BOARD_FRONTLIGHT_1_GPIO, BOARD_FRONTLIGHT_2_GPIO);
+    return ESP_OK;
+}
+
 static esp_err_t sgm_read_reg(uint8_t reg, uint8_t *value)
 {
     return i2c_master_transmit_receive(s_sgm, &reg, sizeof(reg), value, 1, I2C_TIMEOUT_MS);
@@ -138,6 +177,16 @@ static esp_err_t sgm_write_reg(uint8_t reg, uint8_t value)
 {
     uint8_t payload[2] = {reg, value};
     return i2c_master_transmit(s_sgm, payload, sizeof(payload), I2C_TIMEOUT_MS);
+}
+
+static esp_err_t sgm_verify_reg(uint8_t reg, uint8_t expected)
+{
+    uint8_t actual = 0;
+    ESP_RETURN_ON_ERROR(sgm_read_reg(reg, &actual), TAG, "read SGM38121 register 0x%02X failed", reg);
+    ESP_LOGI(TAG, "SGM38121 register 0x%02X=0x%02X (expected 0x%02X)", reg, actual, expected);
+    ESP_RETURN_ON_FALSE(actual == expected, ESP_ERR_INVALID_STATE, TAG,
+                        "SGM38121 register 0x%02X did not retain its setting", reg);
+    return ESP_OK;
 }
 
 static uint8_t sgm_encode_vout_mv_rounded(int target_mv, int min_mv, int max_mv, int offset_mv, int min_reg, int max_reg, int *actual_mv)
@@ -212,23 +261,33 @@ static void camera_probe_known_addresses(const char *label)
     }
 }
 
-static bool stream_rate_limiter_should_send(uint32_t source_fps, uint32_t target_fps, uint32_t *credit)
+static bool stream_rate_limiter_should_send(uint32_t source_fps, uint32_t target_fps, int64_t *next_deadline_us)
 {
     if (source_fps == 0 || target_fps == 0 || target_fps >= source_fps) {
         return true;
     }
 
-    *credit += target_fps;
-    if (*credit < source_fps) {
+    const int64_t now_us = esp_timer_get_time();
+    const int64_t interval_us = 1000000 / target_fps;
+    if (*next_deadline_us == 0) {
+        *next_deadline_us = now_us;
+    }
+    if (now_us < *next_deadline_us) {
         return false;
     }
 
-    *credit -= source_fps;
+    *next_deadline_us += interval_us;
+    if (*next_deadline_us < now_us - interval_us) {
+        *next_deadline_us = now_us + interval_us;
+    }
     return true;
 }
 
 static esp_err_t camera_init_i2c_for_power(void)
 {
+    if (s_i2c_bus != NULL) {
+        return ESP_OK;
+    }
     const i2c_master_bus_config_t bus_cfg = {
         .i2c_port = CONFIG_CAMERA_WIFI_STREAM_I2C_PORT,
         .sda_io_num = CONFIG_CAMERA_WIFI_STREAM_I2C_SDA,
@@ -273,7 +332,10 @@ static void camera_power_i2c_cleanup(void)
         }
         s_sgm = NULL;
     }
+}
 
+static void camera_i2c_deinit(void)
+{
     if (s_i2c_bus != NULL) {
         esp_err_t err = i2c_del_master_bus(s_i2c_bus);
         if (err != ESP_OK) {
@@ -358,7 +420,12 @@ static esp_err_t camera_enable_power(void)
     ESP_GOTO_ON_ERROR(sgm_write_reg(SGM38121_REG_ENABLE, enable_mask), fail, TAG, "enable camera rails failed");
 
     vTaskDelay(pdMS_TO_TICKS(CAMERA_POWER_SETTLE_MS));
+    ESP_GOTO_ON_ERROR(sgm_verify_reg(SGM38121_REG_AVDD1_VOUT, avdd1_reg), fail, TAG, "verify AVDD1 setting failed");
+    ESP_GOTO_ON_ERROR(sgm_verify_reg(SGM38121_REG_AVDD2_VOUT, avdd2_reg), fail, TAG, "verify AVDD2 setting failed");
+    ESP_GOTO_ON_ERROR(sgm_verify_reg(SGM38121_REG_ENABLE, enable_mask), fail, TAG, "verify camera power-on failed");
     camera_probe_known_addresses("after_power_on");
+    /* Keep this bus alive for esp_video, matching factory_camera's shared
+     * SCCB/I2C initialization path. */
     camera_power_i2c_cleanup();
     return ESP_OK;
 
@@ -411,28 +478,73 @@ static void camera_stop_xclk(void)
 #endif
 }
 
+static esp_err_t camera_wait_sensor_ready(void)
+{
+#if CONFIG_CAMERA_WIFI_STREAM_SENSOR_OV2710 && CONFIG_CAMERA_WIFI_STREAM_RESET_GPIO < 0 && CONFIG_CAMERA_WIFI_STREAM_PWDN_GPIO < 0
+    /* Address ACK alone does not establish that the sensor has left reset.
+     * Use the same 16-bit register reads as the OV2710 driver. With explicit
+     * RESET/PWDN GPIOs, leave the reset sequence and detection to esp_video. */
+    const i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = CAMERA_SCCB_ADDR_OV2710,
+        .scl_speed_hz = CONFIG_CAMERA_WIFI_STREAM_I2C_FREQ_HZ,
+    };
+    i2c_master_dev_handle_t sensor = NULL;
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &config, &sensor), TAG,
+                        "add OV2710 readiness device failed");
+    const uint8_t id_high_reg[] = {0x30, 0x0A};
+    const uint8_t id_low_reg[] = {0x30, 0x0B};
+    esp_err_t ret = ESP_OK;
+    uint16_t pid = 0;
+    bool ready = false;
+    for (int attempt = 0; attempt < CAMERA_SENSOR_READY_ATTEMPTS; ++attempt) {
+        uint8_t high = 0, low = 0;
+        ret = i2c_master_transmit_receive(sensor, id_high_reg, sizeof(id_high_reg), &high, 1, I2C_TIMEOUT_MS);
+        if (ret == ESP_OK) {
+            ret = i2c_master_transmit_receive(sensor, id_low_reg, sizeof(id_low_reg), &low, 1, I2C_TIMEOUT_MS);
+        }
+        pid = ((uint16_t)high << 8) | low;
+        if (ret == ESP_OK && pid == 0x2710) {
+            ready = true;
+            ESP_LOGI(TAG, "OV2710 ready: PID=0x%04X (attempt %d)", pid, attempt + 1);
+            break;
+        }
+        if (attempt + 1 < CAMERA_SENSOR_READY_ATTEMPTS) {
+            vTaskDelay(pdMS_TO_TICKS(CAMERA_SENSOR_READY_INTERVAL_MS));
+        }
+    }
+    esp_err_t cleanup_ret = i2c_master_bus_rm_device(sensor);
+    if (!ready) {
+        ESP_LOGE(TAG, "OV2710 not ready: registers 0x300A/0x300B=0x%04X, I2C=%s",
+                 pid, esp_err_to_name(ret));
+        return ret == ESP_OK ? ESP_ERR_NOT_FOUND : ret;
+    }
+    return cleanup_ret;
+#else
+    return ESP_OK;
+#endif
+}
+
 static esp_err_t camera_video_system_init(void)
 {
-    const esp_video_init_csi_config_t csi_config = {
+    /* Also create a valid shared bus when automatic rail control is disabled. */
+    ESP_RETURN_ON_ERROR(camera_init_i2c_for_power(), TAG, "camera I2C init failed");
+    ESP_RETURN_ON_ERROR(camera_start_xclk(), TAG, "camera XCLK init failed");
+    ESP_RETURN_ON_ERROR(camera_wait_sensor_ready(), TAG, "camera sensor readiness check failed");
+    ESP_LOGI(TAG, "Initializing ESP video MIPI-CSI device %s", ESP_VIDEO_MIPI_CSI_DEVICE_NAME);
+    esp_video_init_csi_config_t csi_config = {
         .sccb_config = {
-            .init_sccb = true,
-            .i2c_config = {
-                .port = CONFIG_CAMERA_WIFI_STREAM_I2C_PORT,
-                .scl_pin = CONFIG_CAMERA_WIFI_STREAM_I2C_SCL,
-                .sda_pin = CONFIG_CAMERA_WIFI_STREAM_I2C_SDA,
-            },
+            .init_sccb = false,
+            .i2c_handle = s_i2c_bus,
             .freq = CONFIG_CAMERA_WIFI_STREAM_I2C_FREQ_HZ,
         },
         .reset_pin = (gpio_num_t)CONFIG_CAMERA_WIFI_STREAM_RESET_GPIO,
         .pwdn_pin = (gpio_num_t)CONFIG_CAMERA_WIFI_STREAM_PWDN_GPIO,
         .dont_init_ldo = false,
     };
-    const esp_video_init_config_t video_config = {
+    esp_video_init_config_t video_config = {
         .csi = &csi_config,
     };
-
-    ESP_RETURN_ON_ERROR(camera_start_xclk(), TAG, "camera XCLK init failed");
-    ESP_LOGI(TAG, "Initializing ESP video MIPI-CSI device %s", ESP_VIDEO_MIPI_CSI_DEVICE_NAME);
     esp_err_t ret = esp_video_init(&video_config);
     if (ret != ESP_OK) {
         camera_stop_xclk();
@@ -657,6 +769,46 @@ static void log_camera_chip_id(int fd)
     }
 }
 
+/* Verify real image delivery before networking, so an empty SSID cannot hide
+ * a CSI or encoder failure behind successful sensor detection. */
+static esp_err_t camera_verify_first_frame(camera_stream_ctx_t *video)
+{
+    struct timeval timeout = {.tv_sec = 2};
+    ESP_RETURN_ON_FALSE(ioctl(video->fd, VIDIOC_S_DQBUF_TIMEOUT, &timeout) == 0,
+                        ESP_FAIL, TAG, "set frame timeout failed");
+    struct v4l2_buffer buf = {
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
+    };
+    ESP_RETURN_ON_FALSE(ioctl(video->fd, VIDIOC_DQBUF, &buf) == 0,
+                        ESP_FAIL, TAG, "first camera frame timed out or failed, errno=%d", errno);
+    esp_err_t ret = ESP_ERR_INVALID_SIZE;
+    uint32_t jpeg_size = 0;
+    if (buf.index < VIDEO_BUFFER_COUNT && (buf.flags & V4L2_BUF_FLAG_DONE) &&
+            buf.bytesused > 0 && buf.bytesused <= video->buffer_len[buf.index]) {
+        if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
+            jpeg_size = buf.bytesused;
+            ret = ESP_OK;
+        } else if (buf.bytesused >= video->encoder.input_size) {
+            ret = jpeg_encoder_process(video->encoder.handle, &video->encoder.config,
+                                       video->buffer[buf.index], video->encoder.input_size,
+                                       video->encoder.out_buf, video->encoder.out_size, &jpeg_size);
+        }
+        if (ret == ESP_OK) {
+            const uint8_t *jpeg = video->pixel_format == V4L2_PIX_FMT_JPEG
+                                  ? video->buffer[buf.index] : video->encoder.out_buf;
+            if (jpeg_size < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) {
+                ret = ESP_ERR_INVALID_RESPONSE;
+            }
+        }
+    }
+    ESP_RETURN_ON_FALSE(ioctl(video->fd, VIDIOC_QBUF, &buf) == 0, ESP_FAIL, TAG, "requeue first frame failed");
+    ESP_RETURN_ON_ERROR(ret, TAG, "first frame capture/JPEG validation failed");
+    ESP_LOGI(TAG, "First frame verified: %" PRIu32 "x%" PRIu32 ", raw=%" PRIu32 " bytes, JPEG=%" PRIu32 " bytes",
+             video->width, video->height, buf.bytesused, jpeg_size);
+    return ESP_OK;
+}
+
 static esp_err_t camera_stream_start(camera_stream_ctx_t *video)
 {
     esp_err_t ret = ESP_OK;
@@ -724,6 +876,7 @@ static esp_err_t camera_stream_start(camera_stream_ctx_t *video)
 
     ESP_GOTO_ON_ERROR(ioctl(video->fd, VIDIOC_STREAMON, &type), fail, TAG, "start video stream failed");
     video->streaming = true;
+    ESP_GOTO_ON_ERROR(camera_verify_first_frame(video), fail, TAG, "camera capture self-check failed");
 
     ESP_LOGI(TAG,
              "video0: width=%" PRIu32 " height=%" PRIu32 " format=" V4L2_FMT_STR " fps=%" PRIu32,
@@ -865,7 +1018,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char fps_header[16];
     uint32_t source_fps = video->frame_rate;
     uint32_t target_fps = CONFIG_CAMERA_WIFI_STREAM_MAX_STREAM_FPS;
-    uint32_t frame_credit;
+    int64_t next_frame_deadline_us = 0;
     uint32_t frames_sent = 0;
     uint32_t frames_skipped = 0;
 
@@ -875,8 +1028,6 @@ static esp_err_t stream_handler(httpd_req_t *req)
     if (target_fps == 0 || target_fps > source_fps) {
         target_fps = source_fps;
     }
-    frame_credit = source_fps;
-
     if (xSemaphoreTake(video->stream_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
         httpd_resp_set_status(req, "503 Service Unavailable");
         httpd_resp_sendstr(req, "stream busy");
@@ -887,6 +1038,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
     ESP_GOTO_ON_ERROR(httpd_resp_set_type(req, STREAM_CONTENT_TYPE), done, TAG, "set stream content type failed");
     ESP_GOTO_ON_ERROR(httpd_resp_set_hdr(req, "Cache-Control", "no-cache"), done, TAG, "set cache header failed");
     ESP_GOTO_ON_ERROR(httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*"), done, TAG, "set CORS header failed");
+    int sock = httpd_req_to_sockfd(req);
+    int no_delay = 1;
+    (void)setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
     ESP_GOTO_ON_FALSE(snprintf(fps_header, sizeof(fps_header), "%" PRIu32, target_fps) > 0,
                       ESP_FAIL,
                       done,
@@ -921,7 +1075,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
             continue;
         }
 
-        if (!stream_rate_limiter_should_send(source_fps, target_fps, &frame_credit)) {
+        if (!stream_rate_limiter_should_send(source_fps, target_fps, &next_frame_deadline_us)) {
             frames_skipped++;
             goto frame_done;
         }
@@ -1026,24 +1180,71 @@ static esp_err_t app_nvs_init(void)
 
 void app_main(void)
 {
+    esp_err_t ret;
+    bool video_initialized = false;
+
     ESP_LOGI(TAG, "ESP32-P4 camera WiFi MJPEG stream example");
     ESP_LOGI(TAG, "Hosted WiFi expects ESP32-C6 slave firmware on the onboard module");
 
-    ESP_ERROR_CHECK(app_nvs_init());
-    ESP_ERROR_CHECK(camera_enable_power());
-    ESP_ERROR_CHECK(camera_video_system_init());
-    ESP_ERROR_CHECK(camera_stream_start(&s_camera));
+    ret = app_nvs_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
+    ret = board_disable_frontlight();
+    if (ret != ESP_OK) {
+        goto init_failed;
+    }
+    ret = camera_enable_power();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Camera power initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
+    ret = camera_video_system_init();
+    if (ret != ESP_OK) {
+        goto init_failed;
+    }
+    video_initialized = true;
+    ret = camera_stream_start(&s_camera);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Camera stream initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(wifi_init_sta());
-    ESP_ERROR_CHECK(http_server_start(&s_camera));
+    ret = esp_netif_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Network interface initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Default event loop initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
+    ret = wifi_init_sta();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
+    ret = http_server_start(&s_camera);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP server initialization failed: %s", esp_err_to_name(ret));
+        goto init_failed;
+    }
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
+init_failed:
+    ESP_LOGE(TAG, "Initialization stopped; check camera sensor, power rails, and menuconfig settings.");
     camera_stream_stop(&s_camera);
-    esp_video_deinit();
+    if (video_initialized) {
+        esp_video_deinit();
+    }
     camera_stop_xclk();
+    camera_i2c_deinit();
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }

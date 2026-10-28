@@ -12,6 +12,7 @@ idf_component_register(
         ${M5GFX_PANEL_EPD_COMPAT_SRC}
     INCLUDE_DIRS "."
     REQUIRES
+        m5stack__m5gfx
         driver
         esp_driver_i2c
         esp_event

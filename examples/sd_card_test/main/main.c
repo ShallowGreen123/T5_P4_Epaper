@@ -195,6 +195,7 @@ static double bytes_to_gib(uint64_t bytes)
     return (double)bytes / (1024.0 * 1024.0 * 1024.0);
 }
 
+#if CONFIG_FATFS_LFN_NONE
 static bool is_fat_8_3_char(char c)
 {
     return (c >= '0' && c <= '9') ||
@@ -239,6 +240,7 @@ static bool is_fat_8_3_name(const char *name)
 
     return base_len > 0 && (!in_ext || ext_len > 0);
 }
+#endif
 
 static const char *select_fatfs_file_name(const char *configured_name, const char *fallback_name)
 {

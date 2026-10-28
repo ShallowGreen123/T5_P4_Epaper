@@ -7,6 +7,7 @@ idf_component_register(
     PRIV_REQUIRES
         cxx
         driver
+        esp_driver_i2c
         esp_driver_i2s
         spiffs
         t5_p4_board

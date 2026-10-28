@@ -5,5 +5,4 @@ idf_component_register( SRCS "main.c"
                             esp_hosted
                             esp_netif
                             esp_wifi
-                            nvs_flash
-                            t5_p4_board)
+                            nvs_flash)

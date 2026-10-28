@@ -85,7 +85,7 @@ static void wifi_init_softap(esp_netif_t *wifi_netif, char *ssid, char *password
         wifi_config.ap.channel = channel;
     }
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
 
     ESP_LOGI(TAG, "wifi_init_softap finished.SSID:%s password:%s",
              ssid, password);
@@ -98,7 +98,7 @@ static void wifi_init_sta(esp_netif_t *wifi_netif, char *ssid, char *password)
     snprintf((char *)wifi_config.sta.ssid, EXAMPLE_SSID_LEN, "%s", ssid);
     snprintf((char *)wifi_config.sta.password, EXAMPLE_PASSWORD_LEN, "%s", password);
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
     ESP_LOGI(TAG, "wifi_init_sta finished.");
     ESP_LOGI(TAG, "connect to ap SSID:%s password:%s",
