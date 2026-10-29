@@ -36,13 +36,19 @@ jobs:
           from pathlib import Path
 
           examples_dir = Path("examples")
-          examples = sorted(
-              entry.name
-              for entry in examples_dir.iterdir()
-              if entry.is_dir() and (entry / "CMakeLists.txt").is_file()
-          )
+          examples = []
+          for entry in sorted(examples_dir.iterdir()):
+              if (entry.name in {"epd_test", "epd_touch_test", "epd_wifi_auto_scan"} or
+                  not entry.is_dir() or not (entry / "CMakeLists.txt").is_file()):
+                  continue
+              manifest = entry / "main" / "idf_component.yml"
+              manifest_text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
+              # The P4 v3.2 examples explicitly require IDF 6.1.  Keep the
+              # remaining examples on the CI baseline (IDF 6.0).
+              idf_version = "release-v6.1" if ">=6.1" in manifest_text else "release-v6.0"
+              examples.append({"example": entry.name, "esp_idf_version": idf_version})
 
-          print(f"matrix={json.dumps({'example': examples})}")
+          print(f"matrix={json.dumps({'include': examples})}")
           PY
 
   build:
@@ -62,7 +68,7 @@ jobs:
       - name: Build example
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: release-v6.0
+          esp_idf_version: ${{ matrix.esp_idf_version }}
           target: esp32p4
           path: examples/${{ matrix.example }}
           command: idf.py build
